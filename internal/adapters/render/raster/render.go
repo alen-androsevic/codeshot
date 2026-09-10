@@ -1,0 +1,91 @@
+// Package raster draws a Window with nothing but golang.org/x/image: no
+// browser, no SVG toolchain, no terminal. That is what lets the same bytes
+// produce the same PNG on a laptop and in CI.
+package raster
+
+import (
+	"image"
+	"image/color"
+	"image/draw"
+
+	"codeshot/internal/adapters/fonts"
+	"codeshot/internal/domain"
+)
+
+type Options struct {
+	FontSize   float64
+	LineHeight float64
+}
+
+func DefaultOptions() Options { return Options{FontSize: 13, LineHeight: 1.0} }
+
+type Renderer struct {
+	fonts *fonts.Set
+	opt   Options
+}
+
+func New(f *fonts.Set, opt Options) Renderer { return Renderer{fonts: f, opt: opt} }
+
+// layout is every measurement the drawing code needs, all in device pixels.
+type layout struct {
+	scale    int
+	metrics  fonts.Metrics
+	sizePx   float64
+	margin   int
+	padding  int
+	titlebar int
+	window   image.Rectangle // within the whole image
+	grid     image.Point     // top-left of the first cell
+	cols     int
+	rows     int
+}
+
+func (r Renderer) layout(w domain.Window) (layout, error) {
+	scale := w.Chrome.Scale
+	if scale < 1 {
+		scale = 1
+	}
+	l := layout{scale: scale, sizePx: r.opt.FontSize * float64(scale)}
+	m, err := r.fonts.Metrics(l.sizePx, r.opt.LineHeight)
+	if err != nil {
+		return layout{}, err
+	}
+	l.metrics = m
+	l.margin = w.Chrome.Margin * scale
+	l.padding = w.Chrome.Padding * scale
+	l.titlebar = 0
+	if w.Chrome.Controls != domain.ControlsNone || w.Chrome.ShowTitle {
+		l.titlebar = w.Chrome.TitlebarHeight * scale
+	}
+	l.cols = w.Frame.Grid.Cols
+	l.rows = w.Frame.Grid.Rows()
+	winW := l.cols*m.CellW + 2*l.padding
+	winH := l.rows*m.CellH + 2*l.padding + l.titlebar
+	l.window = image.Rect(l.margin, l.margin, l.margin+winW, l.margin+winH)
+	l.grid = image.Pt(l.window.Min.X+l.padding, l.window.Min.Y+l.titlebar+l.padding)
+	return l, nil
+}
+
+func (r Renderer) Render(w domain.Window) (image.Image, error) {
+	l, err := r.layout(w)
+	if err != nil {
+		return nil, err
+	}
+	img := image.NewRGBA(image.Rect(0, 0, l.window.Max.X+l.margin, l.window.Max.Y+l.margin))
+	if w.Chrome.Background != nil {
+		draw.Draw(img, img.Bounds(), image.NewUniform(rgba(*w.Chrome.Background)), image.Point{}, draw.Src)
+	}
+	if err := r.drawWindow(img, l, w); err != nil {
+		return nil, err
+	}
+	return img, nil
+}
+
+// drawWindow paints the window body and its contents. Task 12 replaces the
+// square fill with rounded corners and a titlebar.
+func (r Renderer) drawWindow(img *image.RGBA, l layout, w domain.Window) error {
+	draw.Draw(img, l.window, image.NewUniform(rgba(w.Theme.Background)), image.Point{}, draw.Src)
+	return r.drawCells(img, l, w)
+}
+
+func rgba(c domain.RGBA) color.RGBA { return color.RGBA{c.R, c.G, c.B, c.A} }
