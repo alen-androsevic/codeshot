@@ -3,6 +3,10 @@ package fonts
 import (
 	"testing"
 
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
+
 	"codeshot/internal/domain"
 )
 
@@ -83,5 +87,63 @@ func TestFaceCacheReturnsTheSameFace(t *testing.T) {
 	b, _ := s.Face(domain.Style{}, 26)
 	if a != b {
 		t.Error("Face rebuilt an identical face; the cache is not working")
+	}
+}
+
+// TestFaceSelectsTheCorrectVariant guards against variant() (or the
+// s.fonts[key.variant] lookup in Face) picking the wrong one of the four
+// embedded TTFs for a style. Advance width can't tell the four cuts apart --
+// this is a monospaced family, so 'M' advances by the same 16px in every
+// variant -- but a glyph's bounds do differ (italic slants it, bold thickens
+// it), so bounds are used as the identity signal instead.
+//
+// Each expected shape is read directly off s.fonts[wantVariant], built with
+// an independent opentype.Face that bypasses variant() and Face()'s cache
+// entirely, so the "expected" side of the comparison can't share a bug with
+// the code under test.
+func TestFaceSelectsTheCorrectVariant(t *testing.T) {
+	s, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	referenceBounds := func(variantIdx int) fixed.Rectangle26_6 {
+		f, err := opentype.NewFace(s.fonts[variantIdx], &opentype.FaceOptions{
+			Size:    26,
+			DPI:     72,
+			Hinting: font.HintingFull,
+		})
+		if err != nil {
+			t.Fatalf("reference face for variant %d: %v", variantIdx, err)
+		}
+		b, _, ok := f.GlyphBounds('M')
+		if !ok {
+			t.Fatalf("reference face for variant %d has no glyph for 'M'", variantIdx)
+		}
+		return b
+	}
+
+	cases := []struct {
+		name string
+		st   domain.Style
+		want int
+	}{
+		{"regular", domain.Style{}, variantRegular},
+		{"bold", domain.Style{Attrs: domain.AttrBold}, variantBold},
+		{"italic", domain.Style{Attrs: domain.AttrItalic}, variantItalic},
+		{"bold+italic", domain.Style{Attrs: domain.AttrBold | domain.AttrItalic}, variantBoldItalic},
+	}
+	for _, c := range cases {
+		f, err := s.Face(c.st, 26)
+		if err != nil {
+			t.Fatalf("Face(%s): %v", c.name, err)
+		}
+		got, _, ok := f.GlyphBounds('M')
+		if !ok {
+			t.Fatalf("Face(%s) has no glyph for 'M'", c.name)
+		}
+		if want := referenceBounds(c.want); got != want {
+			t.Errorf("Face(%s) drew 'M' with bounds %v, want variant %d's bounds %v -- wrong face selected", c.name, got, c.want, want)
+		}
 	}
 }
