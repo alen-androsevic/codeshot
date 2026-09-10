@@ -1,6 +1,10 @@
 package vt
 
-import "testing"
+import (
+	"testing"
+
+	"codeshot/internal/domain"
+)
 
 func TestCursorPositionIsOneBased(t *testing.T) {
 	// CUP row 2, column 3.
@@ -98,15 +102,78 @@ func TestScrollDownPushesTheBottomLineOff(t *testing.T) {
 	}
 }
 
+// TestUnknownSequencesAreReportedNotDrawn covers the design doc's promise
+// that everything outside the supported set is "ignored silently and logged
+// under --debug". Both halves matter and they are easy to get half right: an
+// emulator that recognises the introducer but not the shape of what follows
+// logs the sequence and then lets its tail spill into the grid as literal
+// text, which is worse than not knowing about it at all - the picture then
+// carries characters the terminal never showed.
+//
+// The cases below are the shapes real programs emit that a
+// parameters-then-final-byte parser gets wrong, and each is drawn from
+// something in daily use, not invented: `tput sgr0` emits ESC ( B before its
+// SGR reset, so every terminfo-based colour reset used to leak a stray B;
+// rustc, delta and anything kitty-aware use colon sub-parameters; and a DCS
+// string is how a terminal answers a capability query.
 func TestUnknownSequencesAreReportedNotDrawn(t *testing.T) {
-	e := New(8, 2)
-	var seen []string
-	e.Unknown = func(s string) { seen = append(seen, s) }
-	e.Write([]byte("a\x1b[5;9Zb"))
-	if got := e.Result().Main.TrimTrailingBlank().Text(); got != "ab\n" {
-		t.Errorf("got %q, want the sequence swallowed, not printed", got)
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"unknown CSI final byte", "a\x1b[5;9Zb", "ab\n"},
+		{"charset designator", "ok\x1b(B\x1b[m plain", "ok plain\n"},
+		{"colon sub-parameters", "a\x1b[4:3mb\x1b[0mc", "abc\n"},
+		{"colon-form underline colour", "a\x1b[58:2::255:0:0mb", "ab\n"},
+		{"DCS string terminated by ST", "a\x1bP1$r0m\x1b\\b", "ab\n"},
+		{"APC string terminated by ST", "a\x1b_Gf=100\x1b\\b", "ab\n"},
+		{"PM string terminated by ST", "a\x1b^private\x1b\\b", "ab\n"},
 	}
-	if len(seen) != 1 {
-		t.Fatalf("Unknown called %d times, want once: %v", len(seen), seen)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := New(20, 2)
+			var seen []string
+			e.Unknown = func(s string) { seen = append(seen, s) }
+			e.Write([]byte(c.input))
+			if got := e.Result().Main.TrimTrailingBlank().Text(); got != c.want {
+				t.Errorf("got %q, want %q: the sequence must be swallowed, not printed", got, c.want)
+			}
+			if len(seen) == 0 {
+				t.Error("nothing reported through Unknown; an ignored sequence must still be logged")
+			}
+		})
+	}
+}
+
+// TestUnrecognisableCSIIsSwallowedToItsFinalByte pins the CSI-ignore state
+// separately from the table above, because a CSI whose parameter area holds a
+// byte no parser can make sense of is the one case where the sequence has
+// already gone wrong before its final byte arrives. A parser that gives up
+// and returns to ground at that point prints the rest of the sequence -
+// its final byte included - as text.
+func TestUnrecognisableCSIIsSwallowedToItsFinalByte(t *testing.T) {
+	e := New(20, 2)
+	e.Write([]byte("a\x1b[1\x7f2mb"))
+	if got := e.Result().Main.TrimTrailingBlank().Text(); got != "ab\n" {
+		t.Errorf("got %q, want the whole CSI swallowed up to its final byte", got)
+	}
+}
+
+// TestColonSubParametersDoNotBecomeParameters checks that a colon-form
+// underline still underlines. Swallowing 4:3 by treating the colon as a
+// plain separator would hand SGR the parameter list [4 3] - underline *and*
+// italic - so the grid would come out styled with an attribute the stream
+// never asked for. The digits after a colon belong to the parameter before
+// it, and codeshot renders only the base attribute.
+func TestColonSubParametersDoNotBecomeParameters(t *testing.T) {
+	e := New(8, 2)
+	e.Write([]byte("\x1b[4:3mx"))
+	cell := e.Result().Main.Lines[0][0]
+	if !cell.Style.Has(domain.AttrUnderline) {
+		t.Error("4:3 did not underline; the base parameter was lost")
+	}
+	if cell.Style.Has(domain.AttrItalic) {
+		t.Error("4:3 turned on italic; the sub-parameter 3 was read as a parameter of its own")
 	}
 }

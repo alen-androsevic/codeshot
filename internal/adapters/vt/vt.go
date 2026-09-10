@@ -13,9 +13,13 @@ type parseState uint8
 const (
 	stGround parseState = iota
 	stEsc
+	stEscInter // ESC plus intermediate bytes, awaiting the final one
 	stCSI
+	stCSIIgnore // a CSI already known to be unusable, awaiting its final byte
 	stOSC
 	stOSCEsc
+	stString // a DCS, PM, APC or SOS payload, awaiting its string terminator
+	stStringEsc
 )
 
 // Emulator turns a byte stream into grids. It is a value with no I/O of its
@@ -31,6 +35,10 @@ type Emulator struct {
 	state   parseState
 	params  []int
 	private byte
+	inter   []byte // the intermediate bytes of the escape being parsed
+	subparm bool   // the CSI parameter being read is a colon sub-parameter
+	subseen bool   // this CSI carried sub-parameters somewhere
+	strKind byte   // which of P, ^, _ or X opened the string being swallowed
 	osc     []byte
 	utf8buf []byte
 
