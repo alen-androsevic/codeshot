@@ -2585,9 +2585,11 @@ func TestCoverage(t *testing.T) {
 			t.Errorf("embedded font does not cover %q", r)
 		}
 	}
-	// U+E0A0 is a private-use Powerline glyph; only a patched font has it.
-	if s.CoversRune('\uE0A0') {
-		t.Error("CoversRune claims a Powerline glyph an unpatched font cannot have")
+	// A private-use codepoint the embedded font genuinely lacks, to prove
+	// CoversRune can say no. Do NOT use U+E0A0 here: JetBrains Mono NL ships
+	// its own small Powerline set, so that codepoint IS covered.
+	if s.CoversRune('\uF000') {
+		t.Error("CoversRune claims a Nerd Font glyph the embedded font does not have")
 	}
 }
 
