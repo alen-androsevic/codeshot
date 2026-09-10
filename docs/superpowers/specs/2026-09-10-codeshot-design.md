@@ -195,8 +195,10 @@ Default font size 13.
 - Title centred, 11px, dimmed foreground. Defaults to the command text.
 - Corner radius 10 on all four corners.
 - Shadow: three-pass box blur (a good gaussian approximation), offset y+18,
-  radius 40, α 0.35. `--margin` defaults to 48 with the shadow on, 0 with it
-  off. Outside the margin: transparent, unless `--background #hex`.
+  radius 40, α 0.35. `--margin` defaults to 64 with the shadow on, 0 with it
+  off — the blur spreads about forty pixels and sits eighteen lower, and a
+  clipped shadow ends in a hard straight edge that reads as a bug. Outside the
+  margin: transparent, unless `--background #hex`.
 
 ### Text
 
