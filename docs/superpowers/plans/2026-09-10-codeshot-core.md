@@ -977,7 +977,9 @@ func TestCombiningMarksAttachToThePrecedingCell(t *testing.T) {
 }
 
 func TestOutputTallerThanTheScreenKeepsScrollback(t *testing.T) {
-	got := mainText(t, 8, 2, "one\ntwo\nthree\nfour")
+	// Twenty columns, so nothing wraps and the staircase below is only the
+	// line feeds keeping their column.
+	got := mainText(t, 20, 2, "one\ntwo\nthree\nfour")
 	want := "one\n   two\n      three\n           four\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -1353,8 +1355,8 @@ func TestCursorPositionDefaultsToHome(t *testing.T) {
 }
 
 func TestRelativeCursorMoves(t *testing.T) {
-	if got := mainText(t, 10, 4, "abcd\x1b[2D\x1b[1AX"); got != "abX\n" {
-		t.Errorf("left-then-up: got %q", got)
+	if got := mainText(t, 10, 4, "abcd\x1b[2D\x1b[1AX"); got != "abXd\n" {
+		t.Errorf("left-then-up: got %q, want the c overwritten and the d intact", got)
 	}
 	if got := mainText(t, 10, 4, "a\x1b[2BX"); got != "a\n\n X\n" {
 		t.Errorf("down two: got %q", got)
@@ -1397,12 +1399,21 @@ func TestEraseInDisplay(t *testing.T) {
 	}
 }
 
-func TestScrollUpAndDown(t *testing.T) {
-	if got := mainText(t, 6, 3, "a\n b\n  c\x1b[S"); got != " b\n  c\n" {
-		t.Errorf("SU: got %q, want the top line pushed off", got)
+func TestScrollUpMovesTheScreenAndKeepsTheLine(t *testing.T) {
+	// SU scrolls the visible area; on the normal buffer the line that leaves
+	// the top is kept, because that is what scrollback is. So the proof that
+	// the screen moved is where a write to row 1 now lands: on "b", not "a".
+	got := mainText(t, 6, 3, "a\r\nb\r\nc\x1b[S\x1b[1;1HX")
+	if got != "a\nX\nc\n" {
+		t.Errorf("got %q, want a kept and the b overwritten", got)
 	}
-	if got := mainText(t, 6, 3, "a\n b\n  c\x1b[T"); got != "\na\n b\n" {
-		t.Errorf("SD: got %q, want a blank line inserted at the top", got)
+}
+
+func TestScrollDownPushesTheBottomLineOff(t *testing.T) {
+	// SD has nowhere to keep what falls off the bottom, so "c" is gone.
+	got := mainText(t, 6, 3, "a\r\nb\r\nc\x1b[T\x1b[1;1HX")
+	if got != "X\na\nb\n" {
+		t.Errorf("got %q, want a blank line inserted at the top and c dropped", got)
 	}
 }
 
@@ -4654,7 +4665,7 @@ Flags for render:
   --title <text>       window title (default: the command)
   --no-title           draw no title
   --controls <style>   macos, linux or none (default macos)
-  --scale <n>          pixel scale (default 2)
+  --scale <n>          pixel scale, at least 1 (default 2)
   --padding <n>        pixels around the grid (default 14)
   --margin <n>         pixels around the window (default 64)
   --no-shadow          drop the drop shadow
@@ -4739,6 +4750,10 @@ func render(args []string, stdout, stderr io.Writer) int {
 		chrome.Controls = domain.ControlsNone
 	default:
 		fmt.Fprintf(stderr, "codeshot: --controls %q is not macos, linux or none\n", *controls)
+		return 2
+	}
+	if *scale < 1 {
+		fmt.Fprintf(stderr, "codeshot: --scale must be at least 1, got %d\n", *scale)
 		return 2
 	}
 	if *background != "" {
