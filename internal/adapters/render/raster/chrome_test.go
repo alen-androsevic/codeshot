@@ -280,3 +280,85 @@ func titlebarMarks(img *image.RGBA) int {
 	}
 	return n
 }
+
+// longTitle is longer than any window these tests build, so it overflows in
+// both directions when centred.
+const longTitle = "go test ./... -run TestSomethingWithAVeryLongNameIndeed -count=1 -race"
+
+// TestALongTitleDoesNotPaintOverTheTrafficLights covers the overflow that
+// Chrome.Title defaulting to the command makes routine rather than exotic:
+// the title was centred with no measurement against the window width and no
+// clipping at all, so a command of ordinary length ran left across the
+// traffic lights and right off the image.
+//
+// The check is a whole-band comparison against the same window with no
+// title, rather than a probe at each light's centre point. Sampling single
+// pixels is far too easy to pass by luck - the gaps between glyph strokes
+// are wider than a traffic light's centre, so an overflowing title slides
+// through such a check while visibly crossing the controls. Every pixel of
+// the band the controls own must be exactly what it is when no title is
+// drawn at all.
+func TestALongTitleDoesNotPaintOverTheTrafficLights(t *testing.T) {
+	withTitle := render(t, chromed(wideGrid(), testTheme(), func(c *domain.Chrome) {
+		c.Title = longTitle
+	}))
+	without := render(t, chromed(wideGrid(), testTheme(), func(c *domain.Chrome) {
+		c.Title = ""
+	}))
+	for y := 0; y < 28; y++ {
+		for x := 0; x < 76; x++ {
+			if withTitle.RGBAAt(x, y) != without.RGBAAt(x, y) {
+				t.Fatalf("pixel (%d,%d) = %v with a long title, %v without: the title was painted into the controls' band",
+					x, y, withTitle.RGBAAt(x, y), without.RGBAAt(x, y))
+			}
+		}
+	}
+}
+
+// TestALongTitleStaysInsideTheWindow watches the other end. Nothing clipped
+// the title on the right either, so it ran to the window's edge and was cut
+// off mid-glyph by the image bounds - which reads as a broken render rather
+// than as a shortened title. The band checked here is the strip just inside
+// the right edge, on the titlebar's mid-rows so the corner rounding is not
+// in the way.
+func TestALongTitleStaysInsideTheWindow(t *testing.T) {
+	img := render(t, chromed(wideGrid(), testTheme(), func(c *domain.Chrome) {
+		c.Title = longTitle
+	}))
+	b := img.Bounds()
+	for y := 4; y < 24; y++ {
+		for x := b.Max.X - 10; x < b.Max.X; x++ {
+			if r, g, bb, _ := img.At(x, y).RGBA(); r|g|bb != 0 {
+				t.Fatalf("mark at (%d,%d), inside the strip the title must leave clear at the window's right edge", x, y)
+			}
+		}
+	}
+}
+
+// TestALongTitleIsTruncatedRatherThanDropped keeps the fix honest in the
+// other direction: omitting every title that does not fit would pass both
+// tests above and lose information the user asked to see. A window this wide
+// has room for a shortened title, so a shortened title is what it must get.
+func TestALongTitleIsTruncatedRatherThanDropped(t *testing.T) {
+	img := render(t, chromed(wideGrid(), testTheme(), func(c *domain.Chrome) {
+		c.Title = longTitle
+	}))
+	if titlebarMarks(img) == 0 {
+		t.Error("nothing drawn in the titlebar; a title too long to fit whole must be shortened, not dropped")
+	}
+}
+
+// TestATitleWithNoRoomAtAllIsOmitted is the end of that scale. Once the
+// controls and the window's own edges leave less space than even an ellipsis
+// needs, there is no honest way to show a title, and a lone "…" painted over
+// the traffic lights says less than nothing.
+func TestATitleWithNoRoomAtAllIsOmitted(t *testing.T) {
+	narrow := domain.Grid{Cols: 6, Lines: [][]domain.Cell{cells("x", domain.Style{})}}
+	img := render(t, chromed(narrow, testTheme(), func(c *domain.Chrome) {
+		c.Title = longTitle
+	}))
+	r, g, b, _ := img.At(20, 14).RGBA()
+	if !(r > 0xC000 && g < 0x9000 && b < 0x9000) {
+		t.Errorf("close button = %d,%d,%d; something was drawn over it in a window with no room for a title", r, g, b)
+	}
+}

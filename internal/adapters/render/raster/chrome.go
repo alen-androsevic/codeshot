@@ -58,7 +58,11 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 	if err != nil {
 		return err
 	}
-	width := font.MeasureString(face, w.Chrome.Title)
+	title, ok := fitTitle(face, w.Chrome.Title, l.window.Dx()-2*titleInset(w.Chrome.Controls, l.scale))
+	if !ok {
+		return nil
+	}
+	width := font.MeasureString(face, title)
 	x := l.window.Min.X + (l.window.Dx()-width.Round())/2
 	// A title at full foreground strength shouts over the output it labels.
 	fg, bg := w.Theme.Foreground, w.Theme.Background
@@ -74,7 +78,7 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 		Face: face,
 		Dot:  fixed.P(x, l.window.Min.Y+l.titlebar/2+4*l.scale),
 	}
-	d.DrawString(w.Chrome.Title)
+	d.DrawString(title)
 	return nil
 }
 
@@ -134,4 +138,49 @@ func fillCircle(dst *image.RGBA, cx, cy, radius float64, c color.RGBA) {
 	ra.CubeTo(float32(ox+k), float32(oy-radius), float32(ox+radius), float32(oy-k), float32(ox+radius), float32(oy))
 	ra.ClosePath()
 	ra.Draw(dst, clip, image.NewUniform(c), image.Point{})
+}
+
+// titleInset is how much of each side of the titlebar the window controls
+// claim. The band the title may use has to be symmetric about the window's
+// centre, because the title is centred: reserving only the side the controls
+// actually sit on would simply push the title into that side as it grew.
+//
+// The furthest control's outer edge is 66px from its side of the window (its
+// centre is at 60, its radius 6), and 10px more keeps the title from
+// touching it. Both control styles put their outermost button the same
+// distance from their own edge, so one number covers each.
+func titleInset(c domain.Controls, scale int) int {
+	if c == domain.ControlsNone {
+		return 10 * scale
+	}
+	return 76 * scale
+}
+
+// fitTitle shortens title until it fits in avail pixels, marking the cut with
+// an ellipsis. Chrome.Title defaults to the command, so this is the ordinary
+// case and not an exotic one: without it a title of any length was centred
+// unmeasured, painting over the traffic lights on one side and running off
+// the image on the other.
+//
+// It reports false when not even the ellipsis fits, and then no title is
+// drawn at all - a lone "…" sitting on top of the traffic lights tells the
+// reader less than an empty titlebar does.
+func fitTitle(face font.Face, title string, avail int) (string, bool) {
+	if avail <= 0 {
+		return "", false
+	}
+	if font.MeasureString(face, title).Round() <= avail {
+		return title, true
+	}
+	const ellipsis = "\u2026"
+	if font.MeasureString(face, ellipsis).Round() > avail {
+		return "", false
+	}
+	runes := []rune(title)
+	for n := len(runes) - 1; n > 0; n-- {
+		if s := string(runes[:n]) + ellipsis; font.MeasureString(face, s).Round() <= avail {
+			return s, true
+		}
+	}
+	return ellipsis, true
 }
