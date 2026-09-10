@@ -2,4 +2,5 @@ codeshot
 build/
 *.png
 !docs/**/*.png
+!internal/**/testdata/*.png
 .superpowers/

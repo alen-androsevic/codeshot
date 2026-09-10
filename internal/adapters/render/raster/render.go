@@ -75,6 +75,9 @@ func (r Renderer) Render(w domain.Window) (image.Image, error) {
 	if w.Chrome.Background != nil {
 		draw.Draw(img, img.Bounds(), image.NewUniform(rgba(*w.Chrome.Background)), image.Point{}, draw.Src)
 	}
+	if w.Chrome.Shadow {
+		drawShadow(img, l.window, float64(w.Chrome.Radius*l.scale), 40*l.scale, 18*l.scale, 0.35)
+	}
 	if err := r.drawWindow(img, l, w); err != nil {
 		return nil, err
 	}
