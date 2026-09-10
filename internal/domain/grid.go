@@ -15,8 +15,13 @@ type Cell struct {
 
 // IsBlank reports whether the cell would leave no mark. A space with a
 // background colour is not blank: terminals paint it, so codeshot must too.
+// Neither is a space carrying a combining mark - the renderer draws the mark,
+// and a cell the renderer would draw must never be one the domain discards.
 func (c Cell) IsBlank() bool {
 	if c.Rune != 0 && c.Rune != ' ' {
+		return false
+	}
+	if c.Combining != "" {
 		return false
 	}
 	return c.Style.BG.Kind == ColorDefault && !c.Style.Has(AttrInverse)

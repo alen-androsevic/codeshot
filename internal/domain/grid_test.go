@@ -91,3 +91,22 @@ func TestCellIsBlank(t *testing.T) {
 		t.Error("a space with a background colour is visible, so not blank")
 	}
 }
+
+// TestCellCarryingACombiningMarkIsNotBlank covers a disagreement that cost
+// real output. The rasteriser skips a cell only when its rune is blank *and*
+// it carries no combining marks (render/raster/text.go), so it would happily
+// draw a space with an accent hanging off it - but IsBlank looked only at the
+// rune and the background, called that cell blank, and TrimTrailingBlank
+// deleted the whole line before the renderer ever saw it. A lone accent, or a
+// decomposed string that begins with whitespace - which is how macOS hands
+// over filenames - arrives in exactly this shape.
+func TestCellCarryingACombiningMarkIsNotBlank(t *testing.T) {
+	c := Cell{Rune: ' ', Combining: "́", Width: 1}
+	if c.IsBlank() {
+		t.Error("a space carrying a combining mark reads as blank, but the renderer draws it")
+	}
+	g := Grid{Cols: 2, Lines: [][]Cell{{Cell{Rune: 'x', Width: 1}}, {c}}}
+	if got := g.TrimTrailingBlank().Rows(); got != 2 {
+		t.Errorf("TrimTrailingBlank left %d rows, want 2: the accented line was thrown away", got)
+	}
+}

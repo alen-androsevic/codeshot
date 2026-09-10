@@ -121,3 +121,22 @@ func TestUTF8RuneSplitAcrossWrites(t *testing.T) {
 		}
 	}
 }
+
+// TestALoneCombiningMarkSurvivesTrimming is the end-to-end half of the
+// domain's TestCellCarryingACombiningMarkIsNotBlank: it proves the emulator
+// really does produce a {Rune: ' ', Combining: …} cell, rather than that
+// shape being a fixture invented to fit the fix. A combining mark with no
+// base character before it - a decomposed string starting with whitespace,
+// or a lone accent - hangs off the space the terminal is sitting on.
+func TestALoneCombiningMarkSurvivesTrimming(t *testing.T) {
+	e := New(10, 3)
+	e.Write([]byte("x\r\n ́"))
+	g := e.Result().Main
+	cell := g.Lines[1][0]
+	if cell.Rune != ' ' || cell.Combining != "́" {
+		t.Fatalf("cell = %+v, want a space carrying the combining acute", cell)
+	}
+	if got := g.TrimTrailingBlank().Rows(); got != 2 {
+		t.Errorf("TrimTrailingBlank left %d rows, want 2: the accent was thrown away", got)
+	}
+}
