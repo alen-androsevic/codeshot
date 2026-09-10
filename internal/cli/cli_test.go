@@ -52,6 +52,24 @@ func TestRenderRejectsAMissingFile(t *testing.T) {
 	}
 }
 
+// TestRenderRejectsScaleBelowOne pins the controller ruling from the plan:
+// app.Service.Run treats a zero Chrome.Scale as "no chrome supplied" and
+// replaces the whole struct with defaults, so `--scale 0` would otherwise
+// silently discard every other window flag the caller passed. Nothing in
+// the render pipeline itself would fail on a bad scale - only this flag
+// check stands between the user and that silent data loss - so the exit
+// code must be exactly 2 (a usage error), not merely nonzero.
+func TestRenderRejectsScaleBelowOne(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "x.png", "--scale", "0"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit %d, want 2 for a usage error", code)
+	}
+	if !strings.Contains(stderr.String(), "scale") {
+		t.Errorf("stderr = %q, want --scale named in the error", stderr.String())
+	}
+}
+
 func TestHelpAndVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"--help"}, &stdout, &stderr); code != 0 {
