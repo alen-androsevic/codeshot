@@ -41,6 +41,21 @@ func TestComposeCarriesTheTitle(t *testing.T) {
 	}
 }
 
+func TestComposePreservesBlanksInHeaderWhenMainFollows(t *testing.T) {
+	// This test pins the join-then-trim ordering. In the phase-1 pipeline,
+	// the header always arrives pre-trimmed before Compose sees it, so this
+	// ordering is not reachable through current callers. However, Compose is
+	// a domain function whose contract later capture sources will rely on, so
+	// we pin this to prevent future regressions if a caller passes an
+	// untrimmed header.
+	header := gridOf(8, "~", "")
+	res := Result{Main: gridOf(8, "output")}
+	f := Compose(header, res, FrameOptions{})
+	if got, want := f.Grid.Text(), "~\n\noutput\n"; got != want {
+		t.Errorf("Compose with header trailing blank = %q, want %q", got, want)
+	}
+}
+
 func TestDefaultChromeMatchesTheSpec(t *testing.T) {
 	c := DefaultChrome()
 	if c.Controls != ControlsMacOS || !c.ShowTitle || !c.Shadow {
