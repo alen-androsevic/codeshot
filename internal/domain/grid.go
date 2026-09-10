@@ -4,11 +4,13 @@ import "strings"
 
 // Cell is one terminal cell. Width is 1 for an ordinary rune, 2 for the
 // leading half of a wide one, and 0 for its trailing half, which holds no
-// glyph and is skipped when drawing.
+// glyph and is skipped when drawing. Combining holds any marks that hang off
+// the rune - a string rather than a slice so that Cell stays comparable.
 type Cell struct {
-	Rune  rune
-	Style Style
-	Width uint8
+	Rune      rune
+	Combining string
+	Style     Style
+	Width     uint8
 }
 
 // IsBlank reports whether the cell would leave no mark. A space with a
@@ -83,6 +85,7 @@ func (g Grid) Text() string {
 				r = ' '
 			}
 			row.WriteRune(r)
+			row.WriteString(c.Combining)
 		}
 		b.WriteString(strings.TrimRight(row.String(), " "))
 		b.WriteByte('\n')
