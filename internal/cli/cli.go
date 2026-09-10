@@ -192,6 +192,16 @@ func render(args []string, stdout, stderr io.Writer) int {
 func split(args []string) (positional, flags []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			// A bare -- ends the flags, the way it does everywhere else.
+			// Without this it looked like a flag, and takesValue defaults to
+			// true, so it ate the argument after it: `render hi.ansi --
+			// name.png` exited 0 and wrote codeshot.png. Phase 2's primary
+			// syntax is `codeshot shot.png -- npm test`, so this separator
+			// has to carry its usual meaning.
+			positional = append(positional, args[i+1:]...)
+			return positional, flags
+		}
 		if len(a) > 1 && a[0] == '-' {
 			flags = append(flags, a)
 			// A flag that takes a value swallows the next argument unless the

@@ -36,7 +36,7 @@ func TestRenderWritesAShot(t *testing.T) {
 
 func TestRenderRejectsAnUnknownTheme(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png", "--theme", "no-such"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--theme", "no-such"}, &stdout, &stderr)
 	if code == 0 {
 		t.Error("exit 0 for an unknown theme")
 	}
@@ -61,7 +61,7 @@ func TestRenderRejectsAMissingFile(t *testing.T) {
 // code must be exactly 2 (a usage error), not merely nonzero.
 func TestRenderRejectsScaleBelowOne(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png", "--scale", "0"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--scale", "0"}, &stdout, &stderr)
 	if code != 2 {
 		t.Errorf("exit %d, want 2 for a usage error", code)
 	}
@@ -91,7 +91,7 @@ func writeANSIWithoutCarriageReturns(t *testing.T) string {
 // that and a silently wrong picture.
 func TestRenderWarnsAboutMissingCarriageReturns(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSIWithoutCarriageReturns(t), "x.png"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSIWithoutCarriageReturns(t), "x.png", "--gallery", t.TempDir()}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -108,7 +108,7 @@ func TestRenderWarnsAboutMissingCarriageReturns(t *testing.T) {
 // same as a real pty would produce, so nothing should be said about it.
 func TestRenderDoesNotWarnForANormalCRLFDump(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir()}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -148,5 +148,50 @@ func TestNoArgumentsExplainsItself(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "render") {
 		t.Errorf("stderr = %q, want a hint about the render subcommand", stderr.String())
+	}
+}
+
+// TestBareDoubleDashTerminatesTheFlags pins the argument separator. split
+// classified "--" as a flag, and takesValue defaults to true for anything it
+// does not recognise, so "--" swallowed the argument after it: `codeshot
+// render hi.ansi -- name.png` exited 0 and quietly wrote codeshot.png into
+// the gallery instead, the name the user asked for having been eaten. This
+// is also the syntax phase 2 is built around (`codeshot shot.png -- npm
+// test`), so it has to mean "the flags end here" and nothing else.
+func TestBareDoubleDashTerminatesTheFlags(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "--gallery", dir, "--", "name.png"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "name.png")); err != nil {
+		t.Errorf("the name after -- was not used: %v", err)
+	}
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) != 1 {
+		t.Errorf("gallery holds %v, want name.png alone", entries)
+	}
+}
+
+// TestTheSuiteNeverWritesOutsideItsOwnGallery is a standing guard on the
+// tests above rather than on the CLI: an invocation that forgets --gallery
+// falls back to defaultGallery(), which is $HOME/Codeshots - the user's real
+// one. That is not a test failure anywhere, it just silently litters a
+// directory full of the user's own files, so nothing catches it. Pointing
+// HOME at a temporary directory and checking it stays empty catches it.
+func TestTheSuiteNeverWritesOutsideItsOwnGallery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the run created %v under HOME; a test must never write to the user's own gallery", entries)
 	}
 }
