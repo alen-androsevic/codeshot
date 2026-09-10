@@ -91,3 +91,31 @@ func TestAdapterFallsBackToASensibleSizeWhenTheCaptureHasNone(t *testing.T) {
 		t.Errorf("Cols = %d, want the 100-column fallback", r.Main.Cols)
 	}
 }
+
+func TestAlternateScreenClearsOnReEntry(t *testing.T) {
+	// Enter alt, write, leave, then re-enter. The new alt must be blank,
+	// not holding the old content. This guards against setAlt failing to
+	// reallocate the buffer on entry.
+	e := New(8, 3)
+	e.Write([]byte("main1\r\n\x1b[?1049h")) // Enter alt on clean buffer
+	e.Write([]byte("oldalt"))               // Write to alt
+	e.Write([]byte("\x1b[?1049l"))          // Leave alt, return to main
+	e.Write([]byte("\r\nmain2"))            // Add more to main (new line)
+	e.Write([]byte("\x1b[?1049h"))          // Re-enter alt
+	r := e.Result()
+
+	// The new alt must be blank, not holding "oldalt"
+	altText := strings.TrimSpace(r.Alt.Text())
+	if altText != "" {
+		t.Errorf("alt on re-entry = %q, want blank (old content should be cleared)", altText)
+	}
+
+	// Main must still have both writes
+	mainText := r.Main.Text()
+	if !strings.Contains(mainText, "main1") {
+		t.Errorf("main lost first write: %q", mainText)
+	}
+	if !strings.Contains(mainText, "main2") {
+		t.Errorf("main lost second write: %q", mainText)
+	}
+}
