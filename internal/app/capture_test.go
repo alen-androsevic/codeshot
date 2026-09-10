@@ -13,7 +13,12 @@ type stubSource struct{ c domain.Capture }
 
 func (s stubSource) Capture() (domain.Capture, error) { return s.c, nil }
 
-type stubEmulator struct{ seen []string }
+type stubEmulator struct {
+	seen []string
+	// title is what the emulated stream set with an OSC, as nearly every
+	// interactive shell does.
+	title string
+}
 
 // Emulate wraps each line at c.Cols, the way a real terminal would at the
 // right margin. Honouring Cols (rather than ignoring it, as an earlier
@@ -27,7 +32,7 @@ func (e *stubEmulator) Emulate(c domain.Capture) (domain.Result, error) {
 	for _, line := range strings.Split(strings.TrimSuffix(string(c.Bytes), "\r\n"), "\r\n") {
 		g.Lines = append(g.Lines, wrapLine(line, c.Cols)...)
 	}
-	return domain.Result{Main: g}, nil
+	return domain.Result{Main: g, Title: e.title}, nil
 }
 
 // wrapLine breaks a line into rows of at most cols runes. cols <= 0 means no
@@ -133,6 +138,35 @@ func TestRunTitlesTheWindowWithTheCommand(t *testing.T) {
 	s.Run(Request{})
 	if rend.got.Chrome.Title != "ls -la" {
 		t.Errorf("Title = %q, want the command", rend.got.Chrome.Title)
+	}
+}
+
+// TestRunPrefersTheCommandOverAnOSCTitle records a decision, not just a
+// behaviour. The window title defaults to the command, and an OSC title is
+// only consulted when no command is known. Preferring the OSC title looks
+// reasonable in the abstract - it is what the real window would have shown -
+// but nearly every interactive shell sets one to something like
+// "alen@host: ~/code", so a user asking for a picture of `make build` would
+// get their shell's status line above it instead of the command they named.
+func TestRunPrefersTheCommandOverAnOSCTitle(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Emu = &stubEmulator{title: "alen@host: ~/code"}
+	s.Run(Request{})
+	if rend.got.Chrome.Title != "ls -la" {
+		t.Errorf("Title = %q, want the command to beat the shell's OSC title", rend.got.Chrome.Title)
+	}
+}
+
+// TestRunFallsBackToTheOSCTitleWithNoCommand is the other half: pipe mode
+// without the shim cannot know the command, and there an OSC title is the
+// best name the window has.
+func TestRunFallsBackToTheOSCTitleWithNoCommand(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Source = stubSource{domain.Capture{Cols: 10, Rows: 4, Bytes: []byte("a.go\r\n")}}
+	s.Emu = &stubEmulator{title: "htop"}
+	s.Run(Request{})
+	if rend.got.Chrome.Title != "htop" {
+		t.Errorf("Title = %q, want the OSC title when no command is known", rend.got.Chrome.Title)
 	}
 }
 

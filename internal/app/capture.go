@@ -86,13 +86,20 @@ func (s Service) header(c domain.Capture, req Request) (domain.Grid, error) {
 	return res.Main.TrimTrailingBlank(), nil
 }
 
-// title prefers what the program set with an OSC, because that is what the
-// real window would have shown, and falls back to the command itself.
+// title prefers the command, and falls back to an OSC title only when no
+// command is known.
+//
+// The other order is tempting - an OSC title is what the real window would
+// have shown - but nearly every interactive shell sets one, to something like
+// "alen@host: ~/code". A user asking for a picture of `make build` would then
+// get their shell's status line as the caption. The command is what they
+// named, so the command is what the window is called; the OSC title covers
+// pipe mode without the shim, where the command is genuinely unknown.
 func title(r domain.Result, c domain.Capture) string {
-	if r.Title != "" {
-		return r.Title
+	if c.Command != "" {
+		return c.Command
 	}
-	return c.Command
+	return r.Title
 }
 
 func themeName(name string) string {
