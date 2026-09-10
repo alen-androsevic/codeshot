@@ -131,10 +131,8 @@ func (e *Emulator) print(r rune) {
 	e.cur.put(r, w, e.style)
 }
 
-// escape is filled in by the CSI, SGR and mode work; until then every escape
-// sequence is swallowed whole.
-func (e *Emulator) escape(b byte) {
-	if b >= 0x40 && b <= 0x7E {
-		e.state = stGround
-	}
-}
+// sgr, mode and oscByte are placeholders for Tasks 7 and 8; csi.go already
+// calls them, so they must exist for the package to build.
+func (e *Emulator) sgr()            {}
+func (e *Emulator) mode(final byte) { e.state = stGround }
+func (e *Emulator) oscByte(b byte)  { e.state = stGround }
