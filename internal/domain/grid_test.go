@@ -59,8 +59,12 @@ func TestHeadAndTailCrop(t *testing.T) {
 
 func TestHeadAndTailAreNoOpsWhenNotSmaller(t *testing.T) {
 	g := gridOf(4, "a", "b")
-	if g.Head(0).Rows() != 2 || g.Head(9).Rows() != 2 || g.Tail(0).Rows() != 2 {
+	if g.Head(0).Rows() != 2 || g.Head(9).Rows() != 2 || g.Tail(0).Rows() != 2 || g.Tail(9).Rows() != 2 {
 		t.Error("crop to 0 or to more rows than exist must return the grid unchanged")
+	}
+	// Verify exact boundary: n == len must be a no-op, not crop.
+	if g.Head(2).Rows() != 2 || g.Tail(2).Rows() != 2 {
+		t.Error("crop to exactly the grid size must return the grid unchanged")
 	}
 }
 
