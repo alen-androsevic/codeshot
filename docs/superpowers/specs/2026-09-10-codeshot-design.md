@@ -227,9 +227,14 @@ selected by name.
 ### Themes
 
 Ghostty's theme file format, so `--theme /path/to/any/ghostty/theme` works
-against the several hundred Ghostty ships. A small set is embedded for
-zero-config use: Ghostty's default, catppuccin-mocha, tokyonight, nord,
-gruvbox-dark, solarized-dark, rose-pine-dawn.
+against the several hundred Ghostty ships, and a named `--theme tokyonight`
+resolves against a local Ghostty installation's themes directory when one
+exists.
+
+Two themes are embedded for zero-config use, and they are codeshot's own —
+`codeshot-dark` (the default) and `codeshot-light`. codeshot does **not** ship
+copies of other projects' palettes under their names: a hand-typed
+"catppuccin-mocha" that drifts from the real one is worse than not having it.
 
 ### VT emulator scope
 
