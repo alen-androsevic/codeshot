@@ -27,6 +27,26 @@ func TestRelativeCursorMoves(t *testing.T) {
 	}
 }
 
+// TestRelativeCursorMovesDefaultToOne pins the "no parameter means one cell"
+// branch of A/B/C/D independently of TestRelativeCursorMoves, which only ever
+// supplies an explicit count. The cursor starts and ends away from every
+// edge, so clamping cannot make a step of 0 look like a step of 1 - only the
+// default itself can explain the exact text each assertion checks for.
+func TestRelativeCursorMovesDefaultToOne(t *testing.T) {
+	if got := mainText(t, 10, 7, "\x1b[4;5H\x1b[AX"); got != "\n\n    X\n" {
+		t.Errorf("bare A: got %q, want the cursor one row up from row 4", got)
+	}
+	if got := mainText(t, 10, 7, "\x1b[4;5H\x1b[BX"); got != "\n\n\n\n    X\n" {
+		t.Errorf("bare B: got %q, want the cursor one row down from row 4", got)
+	}
+	if got := mainText(t, 10, 7, "\x1b[4;5H\x1b[CX"); got != "\n\n\n     X\n" {
+		t.Errorf("bare C: got %q, want the cursor one column right of column 5", got)
+	}
+	if got := mainText(t, 10, 7, "\x1b[4;5H\x1b[DX"); got != "\n\n\n   X\n" {
+		t.Errorf("bare D: got %q, want the cursor one column left of column 5", got)
+	}
+}
+
 func TestCursorMovesClampToTheScreen(t *testing.T) {
 	if got := mainText(t, 6, 2, "\x1b[99;99Hx"); got != "\n     x\n" {
 		t.Errorf("got %q, want the cursor clamped to the last cell", got)
