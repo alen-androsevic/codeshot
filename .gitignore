@@ -1,0 +1,4 @@
+codeshot
+build/
+*.png
+!docs/**/*.png
