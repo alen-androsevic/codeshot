@@ -176,20 +176,104 @@ func TestGoldenShots(t *testing.T) {
 	}
 }
 
+// segment is a run of text in one style: the unit the golden fixtures are
+// built from. wide says every rune in the run is double-width, stated rather
+// than guessed so the fixture does not depend on a width table.
+type segment struct {
+	text  string
+	style domain.Style
+	wide  bool
+}
+
+// goldenLine lays segments out as cells, giving a double-width rune the two
+// cells it occupies - a leading cell holding the rune and a width-0
+// continuation behind it, which is the shape vt/buffer.go produces and the
+// shape the renderer's wide-rune handling expects.
+func goldenLine(cols int, segs ...segment) []domain.Cell {
+	line := make([]domain.Cell, 0, cols)
+	for _, seg := range segs {
+		for _, r := range seg.text {
+			if seg.wide {
+				line = append(line,
+					domain.Cell{Rune: r, Style: seg.style, Width: 2},
+					domain.Cell{Style: seg.style, Width: 0})
+				continue
+			}
+			line = append(line, domain.Cell{Rune: r, Style: seg.style, Width: 1})
+		}
+	}
+	for len(line) < cols {
+		line = append(line, domain.Cell{Rune: ' ', Width: 1})
+	}
+	return line
+}
+
+// goldenWindow builds the two fixtures the golden PNGs are made from. The
+// styled one is deliberately busy: before it was enriched, neither fixture
+// contained a single coloured background, so the run-merging pass, inverse,
+// dim and the two-cell layout of a wide rune were all rendered by code no
+// golden had ever looked at.
+//
+// The wide rune is CJK, which JetBrains Mono NL does not cover, so it comes
+// out as the font's .notdef box. That is not an oversight in the fixture -
+// it is what codeshot genuinely draws today, and the design doc says so
+// (no fallback chain until a later phase). Pinning it means the day a
+// fallback font arrives, this golden changes and someone has to look at it.
 func goldenWindow(styled bool) domain.Window {
 	th := testTheme()
 	th.Background = domain.RGBA{R: 0x15, G: 0x18, B: 0x1D, A: 0xFF}
 	th.Foreground = domain.RGBA{R: 0xC3, G: 0xC8, B: 0xD1, A: 0xFF}
-	line := cells("$ codeshot render session.ansi", domain.Style{})
-	if styled {
-		st := domain.Style{FG: domain.IndexedColor(4)}.Set(domain.AttrBold)
-		line = cells("$ codeshot render session.ansi", st)
-	}
+	// A palette wide enough for the fixture to use more than one hue.
+	// Palette[0] is set explicitly: an unset entry is the zero RGBA, which is
+	// transparent, and text drawn in it vanishes - which is exactly what the
+	// first cut of this fixture did to the text on the green run.
+	th.Palette[0] = domain.RGBA{R: 0x15, G: 0x18, B: 0x1D, A: 0xFF}
+	th.Palette[1] = domain.RGBA{R: 0xE5, G: 0x53, B: 0x5F, A: 0xFF}
+	th.Palette[2] = domain.RGBA{R: 0x6E, G: 0xC1, B: 0x77, A: 0xFF}
+	th.Palette[3] = domain.RGBA{R: 0xE0, G: 0xAF, B: 0x68, A: 0xFF}
+	th.Palette[4] = domain.RGBA{R: 0x61, G: 0x9A, B: 0xE8, A: 0xFF}
+	th.Palette[7] = domain.RGBA{R: 0xE8, G: 0xEC, B: 0xF2, A: 0xFF}
+
+	const cols = 34
 	c := domain.DefaultChrome()
 	c.Scale = 1
 	c.Title = "codeshot"
+
+	var lines [][]domain.Cell
+	if !styled {
+		lines = [][]domain.Cell{
+			cells("$ codeshot render session.ansi", domain.Style{}),
+			cells("done.", domain.Style{}),
+		}
+	} else {
+		bold := domain.Style{FG: domain.IndexedColor(4)}.Set(domain.AttrBold)
+		// A background run three cells wide, with a second run of a different
+		// colour hard against it, so the boundary between two fills is in the
+		// picture and not only in a unit test.
+		onRed := domain.Style{FG: domain.IndexedColor(7), BG: domain.IndexedColor(1)}
+		onGreen := domain.Style{FG: domain.IndexedColor(0), BG: domain.IndexedColor(2)}
+		lines = [][]domain.Cell{
+			goldenLine(cols, segment{text: "$ codeshot render session.ansi", style: bold}),
+			goldenLine(cols,
+				segment{text: " FAIL ", style: onRed},
+				segment{text: " PASS ", style: onGreen},
+				segment{text: " 2 of 3", style: domain.Style{FG: domain.IndexedColor(3)}}),
+			goldenLine(cols,
+				segment{text: "inverse", style: domain.Style{}.Set(domain.AttrInverse)},
+				segment{text: " "},
+				segment{text: "dim", style: domain.Style{}.Set(domain.AttrDim)},
+				segment{text: " "},
+				segment{text: "under", style: domain.Style{}.Set(domain.AttrUnderline)},
+				segment{text: " "},
+				segment{text: "struck", style: domain.Style{}.Set(domain.AttrStrike)}),
+			goldenLine(cols,
+				segment{text: "wide ", style: domain.Style{}},
+				segment{text: "\u65e5\u672c", style: domain.Style{FG: domain.IndexedColor(2)}, wide: true},
+				segment{text: " done.", style: domain.Style{}}),
+		}
+	}
 	return domain.Window{
-		Frame:  domain.Frame{Grid: domain.Grid{Cols: 34, Lines: [][]domain.Cell{line, cells("done.", domain.Style{})}}},
+		Frame:  domain.Frame{Grid: domain.Grid{Cols: cols, Lines: lines}},
 		Theme:  th,
 		Chrome: c,
 	}

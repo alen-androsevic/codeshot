@@ -177,3 +177,37 @@ func TestColonSubParametersDoNotBecomeParameters(t *testing.T) {
 		t.Error("4:3 turned on italic; the sub-parameter 3 was read as a parameter of its own")
 	}
 }
+
+// TestEraseFillsWithTheCurrentBackground pins behaviour real programs depend
+// on and nothing checked: an erase paints the cells it clears in whatever
+// background colour is current, so `ESC[41m ESC[2J` leaves a red screen, not
+// a default-coloured one. less's status bar, and any TUI that paints a panel
+// by setting a background and clearing, is built on this. blank() keeps the
+// background and drops every other attribute, so the check below is two
+// assertions, not one: the colour survives and the bold does not.
+func TestEraseFillsWithTheCurrentBackground(t *testing.T) {
+	red := domain.IndexedColor(1)
+	t.Run("erase in display", func(t *testing.T) {
+		e := New(4, 2)
+		e.Write([]byte("\x1b[1;41m\x1b[2J"))
+		for y, line := range e.Result().Main.Lines {
+			for x, cell := range line {
+				if cell.Style.BG != red {
+					t.Fatalf("cell (%d,%d) background = %+v, want the red that was current when it was erased", x, y, cell.Style.BG)
+				}
+				if cell.Style.Has(domain.AttrBold) {
+					t.Fatalf("cell (%d,%d) kept its bold; an erased cell holds the background and nothing else", x, y)
+				}
+			}
+		}
+	})
+	t.Run("erase in line", func(t *testing.T) {
+		e := New(4, 2)
+		e.Write([]byte("abcd\x1b[41m\x1b[1;1H\x1b[K"))
+		for x, cell := range e.Result().Main.Lines[0] {
+			if cell.Style.BG != red {
+				t.Fatalf("cell %d background = %+v, want red", x, cell.Style.BG)
+			}
+		}
+	})
+}

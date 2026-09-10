@@ -205,3 +205,57 @@ func countNonBackground(img *image.RGBA) int {
 	}
 	return n
 }
+
+// TestBackgroundRunsCoverExactlyTheirCells pins the run-merging pass the
+// design doc calls out by name. Neither golden fixture contained a coloured
+// background at all before this, so the whole pass was uncovered.
+//
+// One honest caveat, established by mutation rather than assumed: removing
+// the merging entirely and filling every cell on its own produces
+// byte-identical output, because the fill is draw.Src with a uniform source
+// and so has no anti-aliased edges to leave a seam between. So no test can
+// tell merged fills from per-cell fills, and this one does not pretend to.
+// What it does pin is the arithmetic the merging pass computes - where each
+// run starts and stops - which is where an actual bug would live: a run that
+// stops a cell early leaves an unpainted stripe, one that runs a cell long
+// paints over its neighbour, and both are invisible until someone puts a
+// coloured background next to another one.
+func TestBackgroundRunsCoverExactlyTheirCells(t *testing.T) {
+	set, _ := fonts.Embedded()
+	m, _ := set.Metrics(DefaultOptions().FontSize, DefaultOptions().LineHeight)
+	red := domain.Style{BG: domain.IndexedColor(1)}
+	blue := domain.Style{BG: domain.IndexedColor(4)}
+
+	line := make([]domain.Cell, 10)
+	for i := range line {
+		line[i] = domain.Cell{Rune: ' ', Width: 1}
+	}
+	for i := 2; i < 5; i++ {
+		line[i].Style = red
+	}
+	for i := 5; i < 7; i++ {
+		line[i].Style = blue
+	}
+	img := render(t, bare(domain.Grid{Cols: 10, Lines: [][]domain.Cell{line}}, testTheme()))
+
+	want := func(x int) (r, g, b uint32) {
+		switch cell := x / m.CellW; {
+		case cell >= 2 && cell < 5:
+			return 0xFFFF, 0, 0
+		case cell >= 5 && cell < 7:
+			return 0, 0, 0xFFFF
+		default:
+			return 0, 0, 0 // the theme's own background
+		}
+	}
+	for y := 0; y < m.CellH; y++ {
+		for x := 0; x < 10*m.CellW; x++ {
+			wr, wg, wb := want(x)
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r != wr || g != wg || b != wb {
+				t.Fatalf("pixel (%d,%d) in cell %d = %d,%d,%d, want %d,%d,%d: a background run does not line up with its cells",
+					x, y, x/m.CellW, r, g, b, wr, wg, wb)
+			}
+		}
+	}
+}
