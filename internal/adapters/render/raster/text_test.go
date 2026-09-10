@@ -104,15 +104,26 @@ func TestGlyphsAreDrawn(t *testing.T) {
 }
 
 func TestZeroWidthContinuationCellsDrawNoGlyph(t *testing.T) {
-	// A wide rune owns two cells; the second must not be drawn over.
-	wide := domain.Grid{Cols: 4, Lines: [][]domain.Cell{{
-		{Rune: '日', Width: 2},
-		{Width: 0},
-		{Rune: ' ', Width: 1},
-		{Rune: ' ', Width: 1},
-	}}}
-	if countNonBackground(render(t, bare(wide, testTheme()))) == 0 {
+	// A wide rune owns two cells; the second must not be drawn over. The
+	// continuation cell here carries a non-zero rune on purpose: a fixture
+	// where it holds the zero value can't tell "skipped because Width==0"
+	// apart from "skipped because the rune looked blank anyway". Only a
+	// non-blank rune on a width-0 cell isolates the width check.
+	wide := func(continuation domain.Cell) domain.Grid {
+		return domain.Grid{Cols: 4, Lines: [][]domain.Cell{{
+			{Rune: '日', Width: 2},
+			continuation,
+			{Rune: ' ', Width: 1},
+			{Rune: ' ', Width: 1},
+		}}}
+	}
+	blank := countNonBackground(render(t, bare(wide(domain.Cell{Width: 0}), testTheme())))
+	if blank == 0 {
 		t.Error("the wide rune was not drawn at all")
+	}
+	withRune := countNonBackground(render(t, bare(wide(domain.Cell{Rune: 'X', Width: 0}), testTheme())))
+	if withRune != blank {
+		t.Errorf("continuation cell carrying a rune drew %d marks, want %d (same as a blank continuation cell)", withRune, blank)
 	}
 }
 
@@ -121,6 +132,64 @@ func TestUnderlineAddsPixelsBelowTheBaseline(t *testing.T) {
 	under := domain.Grid{Cols: 2, Lines: [][]domain.Cell{cells("x ", domain.Style{}.Set(domain.AttrUnderline))}}
 	if countNonBackground(render(t, bare(under, testTheme()))) <= countNonBackground(render(t, bare(plain, testTheme()))) {
 		t.Error("underline drew no extra pixels")
+	}
+}
+
+func TestUnderlineSpansAWideRune(t *testing.T) {
+	// The leading and continuation cells of a wide rune both carry the
+	// underline attribute (vt/buffer.go copies the leading cell's Style onto
+	// the continuation cell), so the rule under a wide rune must cover both
+	// cells, not just the first. Cells are blank (space) rather than an
+	// actual wide glyph so the count below is decoration pixels only, not
+	// glyph antialiasing.
+	set, _ := fonts.Embedded()
+	m, _ := set.Metrics(DefaultOptions().FontSize, DefaultOptions().LineHeight)
+	st := domain.Style{}.Set(domain.AttrUnderline)
+	g := domain.Grid{Cols: 2, Lines: [][]domain.Cell{{
+		{Rune: ' ', Style: st, Width: 2},
+		{Style: st, Width: 0},
+	}}}
+	img := render(t, bare(g, testTheme()))
+	y := m.Ascent + 2 // baseline + 2*scale, scale is 1 in bare()
+	got := 0
+	for x := 0; x < 2*m.CellW; x++ {
+		if r, gg, b, _ := img.At(x, y).RGBA(); r|gg|b != 0 {
+			got++
+		}
+	}
+	if want := 2 * m.CellW; got != want {
+		t.Errorf("underline pixels across the wide rune's row = %d, want %d (the full two-cell span)", got, want)
+	}
+}
+
+func TestGlyphIsDrawnInItsOwnColumn(t *testing.T) {
+	// Pins horizontal placement: a lone glyph flanked by blank columns must
+	// leave marks only inside its own column's pixel range. A glyph drawn at
+	// the wrong x-offset would otherwise go undetected by a pixel count alone.
+	set, _ := fonts.Embedded()
+	m, _ := set.Metrics(DefaultOptions().FontSize, DefaultOptions().LineHeight)
+	g := domain.Grid{Cols: 3, Lines: [][]domain.Cell{{
+		{Rune: ' ', Width: 1},
+		{Rune: 'W', Width: 1},
+		{Rune: ' ', Width: 1},
+	}}}
+	img := render(t, bare(g, testTheme()))
+	found := false
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, gg, bb, _ := img.At(x, y).RGBA()
+			if r|gg|bb == 0 {
+				continue
+			}
+			found = true
+			if x < m.CellW || x >= 2*m.CellW {
+				t.Fatalf("mark at (%d,%d), want it confined to the middle column [%d,%d)", x, y, m.CellW, 2*m.CellW)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no marks drawn at all")
 	}
 }
 

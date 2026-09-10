@@ -50,9 +50,11 @@ func (r Renderer) drawGlyphs(img *image.RGBA, l layout, th domain.Theme, line []
 	baseline := top + l.metrics.Ascent
 	for x, cell := range line {
 		if cell.Width == 0 || ((cell.Rune == 0 || cell.Rune == ' ') && cell.Combining == "") {
-			if cell.Width != 0 {
-				r.drawDecorations(img, l, th, cell, x, top, baseline)
-			}
+			// Even a width-0 continuation cell must get its decorations: the
+			// emulator copies the leading cell's Style onto it (vt/buffer.go),
+			// so an underline or strike under a wide rune needs a rectangle
+			// drawn at each cell's own offset to cover the whole rune.
+			r.drawDecorations(img, l, th, cell, x, top, baseline)
 			continue
 		}
 		face, err := r.fonts.Face(cell.Style, l.sizePx)
