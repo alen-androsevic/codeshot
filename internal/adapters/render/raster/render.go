@@ -81,10 +81,12 @@ func (r Renderer) Render(w domain.Window) (image.Image, error) {
 	return img, nil
 }
 
-// drawWindow paints the window body and its contents. Task 12 replaces the
-// square fill with rounded corners and a titlebar.
+// drawWindow paints the window body and its contents: rounded corners,
+// titlebar and traffic lights from drawChrome, then the grid on top.
 func (r Renderer) drawWindow(img *image.RGBA, l layout, w domain.Window) error {
-	draw.Draw(img, l.window, image.NewUniform(rgba(w.Theme.Background)), image.Point{}, draw.Src)
+	if err := r.drawChrome(img, l, w); err != nil {
+		return err
+	}
 	return r.drawCells(img, l, w)
 }
 
