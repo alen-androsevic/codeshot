@@ -49,6 +49,94 @@ func TestShadowLeavesTheImageEdgeClear(t *testing.T) {
 	}
 }
 
+// shadowGeometryFixture mirrors the fixture TestShadowDarkensOutsideTheWindow
+// builds inline. It is a separate copy, not a shared extraction, because the
+// two tests below need the layout's window rectangle as well as the
+// rendered image, and reach for both through a freshly constructed Renderer
+// rather than the render(t, w) test helper.
+func shadowGeometryFixture() domain.Window {
+	g := domain.Grid{Cols: 20, Lines: [][]domain.Cell{cells("shadow", domain.Style{})}}
+	c := domain.DefaultChrome()
+	c.Scale = 1
+	c.Margin = 40
+	c.Title = "x"
+	return domain.Window{Frame: domain.Frame{Grid: g}, Theme: testTheme(), Chrome: c}
+}
+
+// TestShadowOffsetPushesTheShadowDownward exercises the actual render.go call
+// site (via Render, not by calling drawShadow directly with hand-picked
+// arguments), so a regression in the offsetY literal there is caught, not
+// just a bug in drawShadow's own math.
+//
+// TestShadowDarkensOutsideTheWindow's single checkpoint (image bottom minus
+// 20px) sits far enough into the blur's tail that it stayed non-zero and
+// non-opaque even with offsetY zeroed - the box blur's 3-pass support is
+// wide enough to still leak a little shadow there regardless of the offset,
+// so "not zero, not fully opaque" never actually pinned the offset. What the
+// offset alone produces, that a symmetric (unoffset) blur cannot, is
+// asymmetry: the shadow must be substantially darker a fixed distance below
+// the window's bottom edge than the same distance above its top edge. That
+// asymmetry is the checkpoint here, picked from the geometry (the two edges)
+// rather than one arbitrary pixel.
+func TestShadowOffsetPushesTheShadowDownward(t *testing.T) {
+	set, err := fonts.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(set, DefaultOptions())
+	w := shadowGeometryFixture()
+	l, err := r.layout(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := r.Render(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := (l.window.Min.X + l.window.Max.X) / 2
+	const d = 5
+	_, _, _, above := img.At(x, l.window.Min.Y-d).RGBA()
+	_, _, _, below := img.At(x, l.window.Max.Y+d).RGBA()
+	if below <= 3*above {
+		t.Errorf("%dpx below the window alpha = %d, %dpx above = %d; a downward offset must weight the shadow toward the bottom", d, below, d, above)
+	}
+}
+
+// TestShadowAlphaFadesNearTheWindow checks the darkness of the shadow right
+// at the window's own bottom edge - the strongest, most reliable signal the
+// shadow produces, because that point sits deep enough inside the offset
+// silhouette that the mask is close to fully opaque there before the blur
+// softens it. TestShadowDarkensOutsideTheWindow's checkpoint, by contrast,
+// sits far out in the blur's tail, where a correct alpha of 0.35 and a
+// regressed alpha of 1.0 both land on small values neither "not zero" nor
+// "not fully opaque" can tell apart. At the window's edge the gap is wide: at
+// alpha 0.35 the point lands around 20000/65535; at alpha 1.0 it roughly
+// triples past 58000.
+func TestShadowAlphaFadesNearTheWindow(t *testing.T) {
+	set, err := fonts.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(set, DefaultOptions())
+	w := shadowGeometryFixture()
+	l, err := r.layout(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := r.Render(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := (l.window.Min.X + l.window.Max.X) / 2
+	_, _, _, below := img.At(x, l.window.Max.Y).RGBA()
+	if below == 0 {
+		t.Fatal("no shadow at the window's own bottom edge")
+	}
+	if below > 0x9000 {
+		t.Errorf("shadow alpha at the window's bottom edge = %d, want it to stay a fraction of full strength instead of saturating", below)
+	}
+}
+
 func TestGoldenShots(t *testing.T) {
 	set, err := fonts.Embedded()
 	if err != nil {
