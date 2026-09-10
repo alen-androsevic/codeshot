@@ -886,7 +886,7 @@ git commit -m "Add the framing rule and window chrome"
 
 **Interfaces:**
 - Consumes: `domain.Cell`, `domain.Grid`, `domain.Style` from Tasks 1-3.
-- Produces: `vt.New(cols, rows int) *vt.Emulator`; `(*Emulator).Write([]byte) (int, error)`; `(*Emulator).Result() domain.Result`; unexported `buffer` with `put`, `lineFeed`, `carriageReturn`, `backspace`, `tab`, `moveTo`, `eraseInLine`, `eraseInDisplay`, `scrollUp`, `scrollDown`, `grid`.
+- Produces: `vt.New(cols, rows int) *vt.Emulator`; `(*Emulator).Write([]byte) (int, error)`; `(*Emulator).Result() domain.Result`; unexported `buffer` with `put`, `combine`, `lineFeed`, `carriageReturn`, `backspace`, `tab`, `blankLine`, `blank`, `row`, `grid`. (`moveTo`, `eraseInLine`, `eraseInDisplay`, `scrollUp` and `scrollDown` arrive in Task 6, not here.)
 - Also produces: `domain.Cell.Combining string` — combining marks that hang off the cell's rune. It stays a `string` rather than a `[]rune` so that `Cell` remains comparable.
 
 Note on line feeds: codeshot reads the *master* side of a pty, where the kernel has already turned the program's `\n` into `\r\n`. A bare LF therefore moves down without returning to column one, and the tests below pin that.
