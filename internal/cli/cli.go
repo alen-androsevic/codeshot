@@ -42,11 +42,12 @@ Flags for render:
   --no-prompt          leave out the prompt and command lines
   --theme <name|path>  codeshot-dark, codeshot-light, or a Ghostty theme file
   --title <text>       window title (default: the command)
+  --                   end the flags; what follows is positional
   --no-title           draw no title
   --controls <style>   macos, linux or none (default macos)
   --scale <n>          pixel scale, at least 1 (default 2)
   --padding <n>        pixels around the grid (default 14)
-  --margin <n>         pixels around the window (default 64)
+  --margin <n>         pixels around the window (default 64, 0 with --no-shadow)
   --no-shadow          drop the drop shadow
   --background <hex>   fill the margin instead of leaving it transparent
   --font-size <n>      points (default 13)

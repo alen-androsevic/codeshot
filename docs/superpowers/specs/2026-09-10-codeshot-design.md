@@ -99,11 +99,20 @@ entirely optional. Its absence is never an error.
 
 Hexagonal, with a DDD-shaped core.
 
-**Driving side.** `internal/cli` parses argv and is the only code that knows
-flags exist. `cmd/codeshot` is the composition root: it wires concrete adapters
-into the use case and does nothing else. One application service,
-`app.Capture`, executes the pipeline: *source → emulate → frame → render →
-store → report*.
+**Driving side.** `internal/cli` parses argv, is the only code that knows
+flags exist, and is also the composition root: it wires the concrete adapters
+into the use case. `cmd/codeshot` is a three-line shim that hands argv to
+`cli.Run` and exits with what it returns.
+
+*(Amended during implementation. The composition root was originally placed
+in `cmd/codeshot`. It moved because `package main` is not practically
+testable — a composition root that lives there can only be exercised by
+building a binary and running it. With the wiring in `internal/cli`,
+`cli_test.go` drives whole runs in-process, from argv to a PNG on disk, which
+is where the argument-parsing and exit-code behaviour is actually pinned. The
+architectural goal is unchanged and still holds: the domain and the app layer
+stay pure, and knowledge of concrete adapters lives in exactly one package.
+That package is now `internal/cli` rather than `cmd/codeshot`.)*
 
 **Driven ports**, declared in `internal/app/ports.go`, implemented under
 `internal/adapters/`:
@@ -112,13 +121,25 @@ store → report*.
 |---|---|---|
 | `CaptureSource` | `pty` (wrapper), `pipe` (stdin), `file` (saved dump) | session recorder, tmux/cmux scrollback |
 | `Emulator` | in-house VT | `charmbracelet/x/vt` |
-| `Renderer` | `raster` (native Go) | `svg`, `html` |
+| `Renderer` | `raster` (native Go) | `svg`, `html` — see the note below |
 | `FontResolver` | embedded JetBrains Mono + system directory scan | CoreText, fontconfig |
 | `ThemeSource` | embedded themes, Ghostty config/theme parser | iTerm2 `.itermcolors` |
 | `PromptSource` | template | `--prompt-command` (e.g. `starship prompt`) |
 | `Gallery` | filesystem | — |
 | `Clipboard` | `pbcopy` / `wl-copy` / `xclip` | — |
 | `Tty` | unix ioctl (size, isatty) | ConPTY / Windows |
+
+*Amended during implementation:* the `Renderer` and `Gallery` ports are typed
+on `image.Image`, which forecloses the `svg` and `html` adapters this table
+names — neither produces a raster image, and a `Gallery` that stores one
+cannot store a document. Reshaping both ports around some format-neutral
+artifact type, for the sake of two adapters that do not exist and may never,
+is speculative generality: the abstraction would be designed against imagined
+requirements rather than real ones, and would almost certainly be the wrong
+shape when a second renderer finally arrived. The ports stay as they are. If
+and when a second renderer is actually built, that is the moment to reshape
+them, with a real second implementation to design against — and this note is
+the record that the constraint was seen and accepted rather than missed.
 
 ### The OS seam
 
@@ -131,7 +152,10 @@ files plus, optionally, a new chrome preset.
 ### Dependencies
 
 `github.com/creack/pty`, `github.com/mattn/go-runewidth`,
-`golang.org/x/image`. Nothing else. Go, `module codeshot`, hand-rolled argument
+`golang.org/x/image`, and — since `go-runewidth` v0.0.30 stopped being a leaf
+— `github.com/clipperhouse/uax29/v2` in the tail behind it. Nothing else; see
+`docs/adr/0003-dependency-tail.md` for why that last one is accepted rather
+than pinned away. Go, `module codeshot`, hand-rolled argument
 parsing, matching the conventions of the paradajz repo.
 
 ### Why native rasterisation
@@ -208,8 +232,24 @@ rectangles — this avoids seams between adjacent fills. Then glyphs.
 - Bold prefers a real bold face; falls back to synthetic emboldening.
 - Italic prefers a real italic face; falls back to a 12° shear.
 - Dim blends the foreground toward the background.
-- Inverse swaps fg and bg at style-resolution time, before the theme applies.
-- Underline and strikethrough use the font's own metrics.
+- Inverse swaps fg and bg *after* the theme has resolved them to concrete
+  colours. *(Amended: this section originally said "before the theme
+  applies", which cannot work. Before resolution both colours are usually
+  `ColorDefault` — a palette-relative reference, not a colour — so swapping
+  them is a no-op, and inverse text would come out looking exactly like
+  ordinary text. The swap has to happen once the references have become the
+  theme's actual foreground and background, which is what `Theme.Resolve`
+  does and what every terminal does.)*
+- Underline and strikethrough are drawn as rules positioned from the cell's
+  baseline and ascent: the underline sits two pixels (times the scale) below
+  the baseline, the strike a third of the ascent above it, each one scale-unit
+  thick and spanning the cell's full width — both cells of a wide rune
+  included. *(Amended: this section originally said they "use the font's own
+  metrics". `golang.org/x/image`'s `font.Metrics` exposes ascent, descent,
+  height, x-height and cap-height, but not the `underlinePosition` and
+  `underlineThickness` fields of a font's `post` table, so the font's own
+  answer is not reachable through the API codeshot uses. The description above
+  is what is actually achievable, and what the code does.)*
 - No cursor is drawn.
 - Wide and combining runes are handled at grid level via `go-runewidth`.
 
@@ -321,9 +361,12 @@ PNG is pure and needs no terminal.
 
 ## 12. Risks
 
-1. **Golden-image determinism across macOS and Linux.** Verify in the very
-   first renderer commit; if rasterisation differs, fall back to comparing with
-   a per-pixel tolerance.
+1. **Golden-image determinism across macOS and Linux.** *Verified; see
+   `docs/adr/0002-golden-determinism.md`.* The suite was run in a
+   `golang:1.27` Linux container and the goldens came out byte-identical to
+   the macOS ones, so byte-exact comparison stays and no tolerance was
+   introduced. Both machines were arm64; amd64 remains unchecked, which is the
+   open edge of this risk and matters most for CI.
 2. **Does JetBrains Mono cover `❯` (U+276F)?** The answer decides how early the
    fallback chain must be working. Check before relying on the embedded font.
 3. **Scope creep in the in-house VT.** Bounded by the explicit list in §7;

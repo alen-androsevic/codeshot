@@ -36,11 +36,12 @@ Flags for `render`:
 --no-prompt          leave out the prompt and command lines
 --theme <name|path>  codeshot-dark, codeshot-light, or a Ghostty theme file
 --title <text>       window title (default: the command)
+--                   end the flags; what follows is positional
 --no-title           draw no title
 --controls <style>   macos, linux or none (default macos)
 --scale <n>          pixel scale, at least 1 (default 2)
 --padding <n>        pixels around the grid (default 14)
---margin <n>         pixels around the window (default 64)
+--margin <n>         pixels around the window (default 64, 0 with --no-shadow)
 --no-shadow          drop the drop shadow
 --background <hex>   fill the margin instead of leaving it transparent
 --font-size <n>      points (default 13)
@@ -48,6 +49,14 @@ Flags for `render`:
 --gallery <dir>      where bare names are stored (default ~/Codeshots)
 --debug              report every escape sequence the emulator ignored
 ```
+
+The window title defaults to the command you passed with `--command`. If a
+program set a title of its own with an escape sequence, that is used only
+when no command is known — a shell's `alen@host: ~/code` should not end up
+captioning a picture of `make build`.
+
+The margin is the transparent border the drop shadow spreads into, so
+`--no-shadow` drops it to 0 unless you ask for one explicitly.
 
 A dump's lines need to be terminated the way a real pty would have sent them
 (`\r\n`, not a bare `\n`) - codeshot's terminal emulator treats a line feed
@@ -68,6 +77,13 @@ Colours come from Ghostty theme files: `--theme codeshot-dark` and
 /path/to/a/ghostty/theme` reads anyone else's, using the same handful of
 keys (`background`, `foreground`, `cursor-color`, `palette`) Ghostty itself
 understands. No Ghostty installation is required either way.
+
+A theme file has to define at least `background` and `foreground`. Every
+other key is ignored, so without that requirement any file at all would parse
+as a theme — and the likeliest wrong file to reach for is a Ghostty *config*,
+which usually just names a theme (`theme = tokyonight`) and holds no colours
+of its own. Handing one over is an error rather than a picture of a window
+with no colours in it.
 
 Text is set in JetBrains Mono NL, embedded in the binary in all four
 weights (regular, bold, italic, bold-italic), so a shot renders identically

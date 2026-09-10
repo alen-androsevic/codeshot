@@ -1,5 +1,7 @@
 // Command codeshot renders a command and its output as a picture of a terminal
-// window. This file exists to choose the adapters and get out of the way.
+// window. Everything happens in internal/cli, which parses the arguments and
+// chooses the adapters; this file only hands over argv and passes the exit
+// code back, so that the whole of a run stays reachable from a test.
 package main
 
 import (
