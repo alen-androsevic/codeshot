@@ -267,3 +267,22 @@ func TestRenderHelpPrintsTheDocumentedUsage(t *testing.T) {
 		})
 	}
 }
+
+// TestColsDefaultsToTheEmulatorsOwnFallback pins the width the emulator uses
+// when --cols is not given, and pins it through the rendered image rather
+// than by reading the flag back. The flag used to default to 100, duplicating
+// vt.Adapter's fallbackCols; the flag now defaults to 0 and the adapter's
+// own fallback applies, so that phase 2 - which sizes the pty from stderr -
+// can tell "not set" from "set to 100". The visible behaviour must not move
+// an inch while that happens, which is what the first assertion is for; the
+// second keeps a default of 0 from quietly meaning "zero columns".
+func TestColsDefaultsToTheEmulatorsOwnFallback(t *testing.T) {
+	unset := renderedWidth(t)
+	hundred := renderedWidth(t, "--cols", "100")
+	if unset != hundred {
+		t.Errorf("width with no --cols = %d, with --cols 100 = %d; the fallback must still be 100 columns", unset, hundred)
+	}
+	if forty := renderedWidth(t, "--cols", "40"); forty >= unset {
+		t.Errorf("--cols 40 gave width %d, want less than the %d the default gives", forty, unset)
+	}
+}

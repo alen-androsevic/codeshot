@@ -5,7 +5,15 @@
 # =========================================================
 
 function task:test { ## Run every test
-	go test ./...
+	task:vet
+	# -race is not belt and braces here: fonts.Set caches faces in a map and
+	# shares an sfnt.Buffer, and the test that covers concurrent access to it
+	# can only see the fault through the race detector.
+	go test -race ./...
+}
+
+function task:vet { ## Run go vet
+	go vet ./...
 }
 
 function task:build { ## Build the binary

@@ -178,8 +178,8 @@ func TestGoldenShots(t *testing.T) {
 
 func goldenWindow(styled bool) domain.Window {
 	th := testTheme()
-	th.Background = domain.RGBA{0x15, 0x18, 0x1D, 0xFF}
-	th.Foreground = domain.RGBA{0xC3, 0xC8, 0xD1, 0xFF}
+	th.Background = domain.RGBA{R: 0x15, G: 0x18, B: 0x1D, A: 0xFF}
+	th.Foreground = domain.RGBA{R: 0xC3, G: 0xC8, B: 0xD1, A: 0xFF}
 	line := cells("$ codeshot render session.ansi", domain.Style{})
 	if styled {
 		st := domain.Style{FG: domain.IndexedColor(4)}.Set(domain.AttrBold)

@@ -166,5 +166,5 @@ func ParseColor(s string) (domain.RGBA, error) {
 	if err != nil {
 		return domain.RGBA{}, fmt.Errorf("%q is not hexadecimal", s)
 	}
-	return domain.RGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 0xFF}, nil
+	return domain.RGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 0xFF}, nil
 }

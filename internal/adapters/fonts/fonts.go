@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"math"
+	"sync"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -33,8 +34,18 @@ type faceKey struct {
 
 // Set is the four faces of one family, plus a cache of the sized faces built
 // from them.
+//
+// The cache and the glyph-lookup buffer are shared mutable state, so a mutex
+// guards them. Nothing renders concurrently today, but from phase 2 a pty
+// copy loop runs on its own goroutine alongside the pipeline, and an
+// unsynchronised map is the kind of thing that fails once in a hundred runs
+// and is then very hard to believe. The lock covers the Set's own state only;
+// a font.Face handed out from here has buffers of its own and is still not
+// safe to draw with from two goroutines at once.
 type Set struct {
 	fonts [4]*sfnt.Font
+
+	mu    sync.Mutex
 	faces map[faceKey]font.Face
 	buf   sfnt.Buffer
 }
@@ -90,7 +101,19 @@ func (s *Set) SyntheticBold(st domain.Style) bool {
 
 // Face returns a cached face. sizePx is already scaled: DPI is fixed at 72 so
 // that one point is one pixel and callers do the scaling arithmetic once.
+//
+// The face is shared, not a copy, and x/image's opentype.Face keeps mutable
+// buffers inside it - even Metrics() writes to them. So drawing with a face
+// from here is a single-goroutine activity; what this type promises is that
+// its own methods can be called from anywhere.
 func (s *Set) Face(st domain.Style, sizePx float64) (font.Face, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.face(st, sizePx)
+}
+
+// face is Face without the locking, for the methods that already hold mu.
+func (s *Set) face(st domain.Style, sizePx float64) (font.Face, error) {
 	key := faceKey{variant(st), sizePx}
 	if f, ok := s.faces[key]; ok {
 		return f, nil
@@ -111,8 +134,14 @@ func (s *Set) Face(st domain.Style, sizePx float64) (font.Face, error) {
 	return f, nil
 }
 
+// Metrics holds the lock across its reads of the face, not merely across the
+// cache lookup: opentype.Face.Metrics writes to buffers inside the face, so
+// two goroutines measuring the same size at once corrupt each other even
+// though neither is drawing anything.
 func (s *Set) Metrics(sizePx, lineHeight float64) (Metrics, error) {
-	f, err := s.Face(domain.Style{}, sizePx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.face(domain.Style{}, sizePx)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -131,6 +160,8 @@ func (s *Set) Metrics(sizePx, lineHeight float64) (Metrics, error) {
 // CoversRune reports whether the regular face has a glyph for r. Everything
 // else renders as tofu, and saying so is better than drawing a lie.
 func (s *Set) CoversRune(r rune) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	idx, err := s.fonts[variantRegular].GlyphIndex(&s.buf, r)
 	return err == nil && idx != 0
 }

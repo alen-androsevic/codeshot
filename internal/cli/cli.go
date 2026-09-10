@@ -97,9 +97,13 @@ func render(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		command    = fs.String("command", "", "")
-		cwd        = fs.String("cwd", "", "")
-		cols       = fs.Int("cols", 100, "")
+		command = fs.String("command", "", "")
+		cwd     = fs.String("cwd", "", "")
+		// --cols has no default of its own on purpose. vt.Adapter already
+		// falls back to 100 for a capture that never learned its width, and
+		// repeating that number here would leave phase 2 - which sizes the
+		// pty from stderr - unable to tell "not set" from "set to 100".
+		cols       = fs.Int("cols", 0, "")
 		rows       = fs.Int("rows", 0, "")
 		tail       = fs.Bool("tail", false, "")
 		noPrompt   = fs.Bool("no-prompt", false, "")

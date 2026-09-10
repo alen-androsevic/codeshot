@@ -27,19 +27,19 @@ func TestParseReadsGhosttyThemeFiles(t *testing.T) {
 	if th.Name != "sample" {
 		t.Errorf("Name = %q", th.Name)
 	}
-	if (th.Background != domain.RGBA{0x10, 0x12, 0x14, 0xFF}) {
+	if (th.Background != domain.RGBA{R: 0x10, G: 0x12, B: 0x14, A: 0xFF}) {
 		t.Errorf("Background = %v", th.Background)
 	}
-	if (th.Foreground != domain.RGBA{0xC8, 0xCC, 0xD4, 0xFF}) {
+	if (th.Foreground != domain.RGBA{R: 0xC8, G: 0xCC, B: 0xD4, A: 0xFF}) {
 		t.Errorf("Foreground = %v, want the hash to be optional", th.Foreground)
 	}
-	if (th.Cursor != domain.RGBA{0x4D, 0x9F, 0xE8, 0xFF}) {
+	if (th.Cursor != domain.RGBA{R: 0x4D, G: 0x9F, B: 0xE8, A: 0xFF}) {
 		t.Errorf("Cursor = %v", th.Cursor)
 	}
-	if (th.Palette[0] != domain.RGBA{0x1B, 0x1E, 0x24, 0xFF}) {
+	if (th.Palette[0] != domain.RGBA{R: 0x1B, G: 0x1E, B: 0x24, A: 0xFF}) {
 		t.Errorf("Palette[0] = %v", th.Palette[0])
 	}
-	if (th.Palette[9] != domain.RGBA{0xFF, 0x6F, 0x78, 0xFF}) {
+	if (th.Palette[9] != domain.RGBA{R: 0xFF, G: 0x6F, B: 0x78, A: 0xFF}) {
 		t.Errorf("Palette[9] = %v, want spaces around the index to be tolerated", th.Palette[9])
 	}
 }

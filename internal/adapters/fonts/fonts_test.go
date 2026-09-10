@@ -1,6 +1,7 @@
 package fonts
 
 import (
+	"sync"
 	"testing"
 
 	"golang.org/x/image/font"
@@ -146,4 +147,42 @@ func TestFaceSelectsTheCorrectVariant(t *testing.T) {
 			t.Errorf("Face(%s) drew 'M' with bounds %v, want variant %d's bounds %v -- wrong face selected", c.name, got, c.want, want)
 		}
 	}
+}
+
+// TestSetIsSafeForConcurrentUse is written for the race detector: `faces` is
+// a plain map and `buf` a single shared sfnt.Buffer, so two goroutines
+// touching a Set corrupt each other silently. Nothing renders concurrently
+// in phase 1, but phase 2 runs a pty copy loop on its own goroutine beside
+// the pipeline, and an unsynchronised map cache is exactly the sort of fault
+// that surfaces once in a hundred runs and is then not believed. Run under
+// `go test -race`, which the Taskfile's test task does.
+func TestSetIsSafeForConcurrentUse(t *testing.T) {
+	s, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := []domain.Style{
+		{},
+		domain.Style{}.Set(domain.AttrBold),
+		domain.Style{}.Set(domain.AttrItalic),
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 24; i++ {
+				if _, err := s.Face(styles[i%len(styles)], float64(10+i)); err != nil {
+					t.Errorf("Face: %v", err)
+					return
+				}
+				s.CoversRune(rune('a' + i))
+				if _, err := s.Metrics(float64(10+i), 1.0); err != nil {
+					t.Errorf("Metrics: %v", err)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }
