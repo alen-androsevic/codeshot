@@ -15,17 +15,46 @@ func (s stubSource) Capture() (domain.Capture, error) { return s.c, nil }
 
 type stubEmulator struct{ seen []string }
 
+// Emulate wraps each line at c.Cols, the way a real terminal would at the
+// right margin. Honouring Cols (rather than ignoring it, as an earlier
+// version of this stub did) matters because Service.header re-emulates the
+// prompt at the capture's own width: a stub that ignores Cols would agree
+// just as happily with a caller that emulated the header at the wrong width,
+// silently misaligning the header against the body.
 func (e *stubEmulator) Emulate(c domain.Capture) (domain.Result, error) {
 	e.seen = append(e.seen, string(c.Bytes))
-	g := domain.Grid{Cols: 10}
+	g := domain.Grid{Cols: c.Cols}
 	for _, line := range strings.Split(strings.TrimSuffix(string(c.Bytes), "\r\n"), "\r\n") {
-		row := make([]domain.Cell, 0, len(line))
-		for _, r := range line {
-			row = append(row, domain.Cell{Rune: r, Width: 1})
-		}
-		g.Lines = append(g.Lines, row)
+		g.Lines = append(g.Lines, wrapLine(line, c.Cols)...)
 	}
 	return domain.Result{Main: g}, nil
+}
+
+// wrapLine breaks a line into rows of at most cols runes. cols <= 0 means no
+// wrapping.
+func wrapLine(line string, cols int) [][]domain.Cell {
+	runes := []rune(line)
+	if cols <= 0 || len(runes) <= cols {
+		return [][]domain.Cell{cellsOf(runes)}
+	}
+	var rows [][]domain.Cell
+	for len(runes) > 0 {
+		n := cols
+		if n > len(runes) {
+			n = len(runes)
+		}
+		rows = append(rows, cellsOf(runes[:n]))
+		runes = runes[n:]
+	}
+	return rows
+}
+
+func cellsOf(runes []rune) []domain.Cell {
+	row := make([]domain.Cell, 0, len(runes))
+	for _, r := range runes {
+		row = append(row, domain.Cell{Rune: r, Width: 1})
+	}
+	return row
 }
 
 type stubPrompt struct{}
@@ -144,5 +173,32 @@ func TestRunPassesFrameOptionsThrough(t *testing.T) {
 	s.Run(Request{Frame: domain.FrameOptions{Rows: 1}})
 	if rend.got.Frame.Grid.Rows() != 1 {
 		t.Errorf("rows = %d, want the crop applied", rend.got.Frame.Grid.Rows())
+	}
+}
+
+func TestRunEmulatesTheHeaderAtTheCaptureWidth(t *testing.T) {
+	// The header is emulated at the capture's own Cols/Rows so it wraps the
+	// same way the real output would. stubPrompt renders "> ls -la\r\n" - 8
+	// runes - which at Cols=5 wraps into "> ls " and "-la". If Service.header
+	// emulated it at some other width (999, say), it would not wrap and the
+	// composed text would read "> ls -la" on one line instead of two, so this
+	// is a direct check that the capture's width, not some fixed one, made
+	// the trip.
+	rend := &stubRenderer{}
+	s := Service{
+		Source:  stubSource{domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 5, Rows: 4, Bytes: []byte("ab\r\ncd\r\n")}},
+		Emu:     &stubEmulator{},
+		Prompt:  stubPrompt{},
+		Themes:  stubThemes{},
+		Render:  rend,
+		Gallery: &stubGallery{taken: map[string]bool{}},
+		Report:  &stubReporter{},
+	}
+	if _, err := s.Run(Request{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := "> ls\n-la\nab\ncd\n"
+	if got := rend.got.Frame.Grid.Text(); got != want {
+		t.Errorf("frame = %q, want %q (header wrapped at the capture's width)", got, want)
 	}
 }

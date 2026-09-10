@@ -9,6 +9,7 @@ func TestSlug(t *testing.T) {
 		"  ls   -la  ":       "ls-la",
 		"cat /etc/hosts":     "cat-etc-hosts",
 		"echo 'hi there!'":   "echo-hi-there",
+		"LS -la":             "ls-la",
 		"":                   "codeshot",
 		"!!!":                "codeshot",
 	}
