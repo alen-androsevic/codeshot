@@ -3109,9 +3109,12 @@ func (r Renderer) drawGlyphs(img *image.RGBA, l layout, th domain.Theme, line []
 	baseline := top + l.metrics.Ascent
 	for x, cell := range line {
 		if cell.Width == 0 || ((cell.Rune == 0 || cell.Rune == ' ') && cell.Combining == "") {
-			if cell.Width != 0 {
-				r.drawDecorations(img, l, th, cell, x, top, baseline)
-			}
+			// The trailing half of a wide rune draws no glyph, but it must
+			// still draw its own decorations: a rule one cell wide under a
+			// two-cell character stops halfway across it. The emulator copies
+			// the leading cell's style onto the continuation cell precisely so
+			// this works.
+			r.drawDecorations(img, l, th, cell, x, top, baseline)
 			continue
 		}
 		face, err := r.fonts.Face(cell.Style, l.sizePx)
