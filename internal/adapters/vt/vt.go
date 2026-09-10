@@ -130,8 +130,3 @@ func (e *Emulator) print(r rune) {
 	}
 	e.cur.put(r, w, e.style)
 }
-
-// mode and oscByte are placeholders for Task 8; csi.go already calls them,
-// so they must exist for the package to build.
-func (e *Emulator) mode(final byte) { e.state = stGround }
-func (e *Emulator) oscByte(b byte)  { e.state = stGround }
