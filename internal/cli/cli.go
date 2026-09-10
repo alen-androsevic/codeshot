@@ -79,6 +79,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func render(args []string, stdout, stderr io.Writer) int {
+	// Help is intercepted before flag.FlagSet ever sees it. Left to the
+	// FlagSet, ContinueOnError returns ErrHelp only *after* printing its own
+	// dump of single-dash flags with empty descriptions, and render exits 2 -
+	// so the usage block above, which spells the flags the way the README
+	// does, was unreachable. A -- ends the search: phase 2 hands everything
+	// after it to a child command, whose own --help is not codeshot's.
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
+	}
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
@@ -108,6 +123,7 @@ func render(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
+	named := namedFlags(fs)
 	if len(positional) == 0 {
 		fmt.Fprint(stderr, "codeshot: render needs a file to read\n")
 		return 2
@@ -117,6 +133,15 @@ func render(args []string, stdout, stderr io.Writer) int {
 	chrome.Scale = *scale
 	chrome.Padding = *padding
 	chrome.Margin = *margin
+	if *noShadow && !named["margin"] {
+		// The margin exists to hold the blur, which spreads about forty
+		// pixels and sits eighteen lower. With no shadow to hold there is
+		// nothing in it, and 64px of dead transparent border on every side is
+		// not what --no-shadow asks for. An explicit --margin 64 still means
+		// 64, which is why this asks whether the flag was named rather than
+		// comparing its value against the default.
+		chrome.Margin = 0
+	}
 	chrome.Shadow = !*noShadow
 	chrome.ShowTitle = !*noTitle
 	chrome.Title = *title
@@ -185,6 +210,16 @@ func render(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// namedFlags reports which flags the caller actually wrote out, which
+// flag.FlagSet offers no direct query for. It is what lets one flag's default
+// depend on another without trampling a value the user set by hand: a
+// hardcoded default cannot tell "not set" from "set to the same number".
+func namedFlags(fs *flag.FlagSet) map[string]bool {
+	named := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { named[f.Name] = true })
+	return named
 }
 
 // split separates positional arguments from flags, so that both orders work:

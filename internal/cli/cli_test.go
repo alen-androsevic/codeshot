@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,5 +194,76 @@ func TestTheSuiteNeverWritesOutsideItsOwnGallery(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("the run created %v under HOME; a test must never write to the user's own gallery", entries)
+	}
+}
+
+// renderedWidth runs render into a fresh gallery and reports how wide the
+// PNG came out. The margin is the only thing these tests vary, so a width
+// difference is a margin difference.
+func renderedWidth(t *testing.T, extra ...string) int {
+	t.Helper()
+	dir := t.TempDir()
+	args := append([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, extra...)
+	var stdout, stderr bytes.Buffer
+	if code := Run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	f, err := os.Open(filepath.Join(dir, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	cfg, err := png.DecodeConfig(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.Width
+}
+
+// TestMarginDefaultsToZeroWithTheShadowOff pins the design doc's rule that
+// --margin "defaults to 64 with the shadow on, 0 with it off". The margin
+// exists to hold the blur, which spreads about forty pixels and sits
+// eighteen lower; with no shadow to hold there is nothing in it, and 64px of
+// dead transparent border on every side is not what --no-shadow asks for.
+// The flag's default was hardcoded, so it could not tell "not set" from
+// "set to 64" - which is the whole difficulty here, and why the last case
+// below matters as much as the first two.
+func TestMarginDefaultsToZeroWithTheShadowOff(t *testing.T) {
+	const scale = 2 // the default
+	withShadow := renderedWidth(t)
+	noShadow := renderedWidth(t, "--no-shadow")
+	if got, want := withShadow-noShadow, 2*64*scale; got != want {
+		t.Errorf("--no-shadow narrowed the image by %d, want %d: the margin should fall to 0", got, want)
+	}
+	explicit := renderedWidth(t, "--no-shadow", "--margin", "64")
+	if explicit != withShadow {
+		t.Errorf("--no-shadow --margin 64 gave width %d, want %d: an explicit 64 must be honoured, not mistaken for the default", explicit, withShadow)
+	}
+	zero := renderedWidth(t, "--margin", "0")
+	if zero != noShadow {
+		t.Errorf("--margin 0 with the shadow on gave width %d, want %d", zero, noShadow)
+	}
+}
+
+// TestRenderHelpPrintsTheDocumentedUsage covers a subcommand that answered
+// --help with exit 2 and Go's raw flag dump: --help was handled only at the
+// top level, so inside render() flag.ContinueOnError printed twenty
+// single-dash flags with empty descriptions and returned ErrHelp, and the
+// hand-written usage block - the one that spells the flags the way the
+// README does - was unreachable.
+func TestRenderHelpPrintsTheDocumentedUsage(t *testing.T) {
+	for _, arg := range []string{"-h", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{"render", arg}, &stdout, &stderr); code != 0 {
+				t.Errorf("exit %d, want 0; asking for help is not an error", code)
+			}
+			if !strings.Contains(stdout.String(), "--gallery") {
+				t.Errorf("stdout = %q, want the documented double-dash flag list", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want help on stdout and nothing on stderr", stderr.String())
+			}
+		})
 	}
 }
