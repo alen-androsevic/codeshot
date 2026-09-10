@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -149,6 +150,7 @@ func render(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	reporter := report.Writer{Err: stderr}
+	warnAboutMissingCarriageReturns(positional[0], reporter)
 	emulator := vt.Adapter{}
 	if *debug {
 		emulator.Unknown = func(seq string) { reporter.Warn("ignored " + seq) }
@@ -223,6 +225,38 @@ func takesValue(flag string) bool {
 		return false
 	}
 	return true
+}
+
+// warnAboutMissingCarriageReturns reads the dump directly, separately from
+// the CaptureSource that reads it again for the real run, because this check
+// must never change what gets rendered: rewriting a lone \n into \r\n would
+// corrupt a genuine capture that really does mean "move down, stay in this
+// column" - codeshot renders what a pty master emitted, and a warning is as
+// far as it goes to second-guess that. A read failure here (a missing file,
+// say) is left for the real pipeline to report.
+func warnAboutMissingCarriageReturns(path string, reporter report.Writer) {
+	data, err := os.ReadFile(path)
+	if err != nil || !looksLikeAPlainRedirect(data) {
+		return
+	}
+	reporter.Warn(fmt.Sprintf(
+		"%s has more than one line and no carriage returns. A plain `cmd > file` "+
+			"redirect never passes through a pty, so the terminal driver never turns "+
+			"\\n into \\r\\n, and this will stair-step: the cursor moves down but "+
+			"never back to column one between lines. Capture through a pty instead, "+
+			"e.g. `script -q dump.ansi cmd`.", path))
+}
+
+// looksLikeAPlainRedirect reports whether data has more than one line but not
+// a single carriage return in it - the signature of a dump assembled by
+// `cmd > file` rather than captured through a pty. A single line has no
+// alignment to lose, so it is not flagged.
+func looksLikeAPlainRedirect(data []byte) bool {
+	if bytes.IndexByte(data, '\r') != -1 {
+		return false
+	}
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n"))
+	return len(lines) > 1
 }
 
 func defaultGallery() string {

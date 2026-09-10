@@ -70,6 +70,53 @@ func TestRenderRejectsScaleBelowOne(t *testing.T) {
 	}
 }
 
+func writeANSIWithoutCarriageReturns(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "session.ansi")
+	// No \r anywhere: this is what a plain `cmd > file` redirect produces,
+	// since it never passes through a pty to pick up the translation a real
+	// terminal session would have applied.
+	body := "line one\nline two\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestRenderWarnsAboutMissingCarriageReturns covers the landmine a plain
+// shell redirect walks straight into: without a single \r across more than
+// one line, the emulator can never return to column one between lines and
+// the picture stair-steps, with nothing in the render pipeline itself ever
+// failing to explain why. The warning is the only thing standing between
+// that and a silently wrong picture.
+func TestRenderWarnsAboutMissingCarriageReturns(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSIWithoutCarriageReturns(t), "x.png"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "carriage return") {
+		t.Errorf("stderr = %q, want a warning about missing carriage returns", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "pty") {
+		t.Errorf("stderr = %q, want the warning to say how to capture through a pty", stderr.String())
+	}
+}
+
+// TestRenderDoesNotWarnForANormalCRLFDump guards against a false alarm on
+// every ordinary capture: writeANSI's dump already has \r\n line endings,
+// same as a real pty would produce, so nothing should be said about it.
+func TestRenderDoesNotWarnForANormalCRLFDump(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "x.png"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "carriage return") {
+		t.Errorf("stderr = %q, warned about a dump that already has \\r\\n", stderr.String())
+	}
+}
+
 func TestHelpAndVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"--help"}, &stdout, &stderr); code != 0 {
