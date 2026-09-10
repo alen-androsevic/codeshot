@@ -3374,7 +3374,14 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 
 // fillRoundRect fills r with c, rounding every corner. Anti-aliasing comes
 // from x/image's rasteriser, so the edges hold up when the shot is scaled.
-func fillRoundRect(dst *image.RGBA, r image.Rectangle, radius float64, c color.RGBA) {
+func fillRoundRect(dst *image.RGBA, full image.Rectangle, radius float64, c color.RGBA) {
+	// x/image's rasteriser does not clip: it indexes dst.Pix from r.Min
+	// directly, so a rectangle poking outside the image panics or wraps into
+	// the wrong rows. Clipping here is what makes every caller safe.
+	r := full.Intersect(dst.Bounds())
+	if r.Empty() {
+		return
+	}
 	w, h := float64(r.Dx()), float64(r.Dy())
 	radius = math.Min(radius, math.Min(w, h)/2)
 	ra := vector.NewRasterizer(r.Dx(), r.Dy())
@@ -3396,7 +3403,14 @@ func fillRoundRect(dst *image.RGBA, r image.Rectangle, radius float64, c color.R
 const kappa = 0.5522847498
 
 func fillCircle(dst *image.RGBA, cx, cy, radius float64, c color.RGBA) {
-	r := image.Rect(int(cx-radius)-2, int(cy-radius)-2, int(cx+radius)+2, int(cy+radius)+2)
+	full := image.Rect(int(cx-radius)-2, int(cy-radius)-2, int(cx+radius)+2, int(cy+radius)+2)
+	// Same clipping rule as fillRoundRect, and it bites here first: the
+	// button offsets are fixed at 20/40/60, so a narrow window puts a circle
+	// clean outside the image.
+	r := full.Intersect(dst.Bounds())
+	if r.Empty() {
+		return
+	}
 	ra := vector.NewRasterizer(r.Dx(), r.Dy())
 	ox, oy := cx-float64(r.Min.X), cy-float64(r.Min.Y)
 	k := radius * kappa
