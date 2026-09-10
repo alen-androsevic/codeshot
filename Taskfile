@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# =========================================================
+# Taskfile gives you a set of quick tasks for your project
+# More info: https://github.com/Enrise/Taskfile
+# =========================================================
+
+function task:test { ## Run every test
+	go test ./...
+}
+
+function task:build { ## Build the binary
+	go build -o codeshot ./cmd/codeshot
+}
+
+function task:golden { ## Rewrite the golden images after a deliberate change
+	go test ./internal/adapters/render/raster/ -update
+}
+
+function task:demo { ## Take a shot of ls, to look at
+	task:build
+	ls --color=always -la > /tmp/codeshot-demo.ansi 2>/dev/null || ls -G -la > /tmp/codeshot-demo.ansi
+	./codeshot render /tmp/codeshot-demo.ansi demo.png --command "ls -la"
+}
+
+function task:fmt { ## Format everything
+	gofmt -w .
+}
+
+function task:help { ## Show this help
+	grep -E '^function task:.*##' "$0" | sed 's/function task:/  /; s/ *{ *## /\t/' | expand -t 24
+}
+
+"task:${1:-help}" "${@:2}"

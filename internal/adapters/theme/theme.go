@@ -80,11 +80,11 @@ func Parse(r io.Reader, name string) (domain.Theme, error) {
 		var err error
 		switch key {
 		case "background":
-			th.Background, err = parseColor(value)
+			th.Background, err = ParseColor(value)
 		case "foreground":
-			th.Foreground, err = parseColor(value)
+			th.Foreground, err = ParseColor(value)
 		case "cursor-color":
-			th.Cursor, err = parseColor(value)
+			th.Cursor, err = ParseColor(value)
 		case "palette":
 			err = parsePalette(&th, value)
 		}
@@ -107,7 +107,7 @@ func parsePalette(th *domain.Theme, value string) error {
 	if i < 0 || i > 15 {
 		return fmt.Errorf("index %d is outside the 16-colour palette", i)
 	}
-	c, err := parseColor(strings.TrimSpace(colorText))
+	c, err := ParseColor(strings.TrimSpace(colorText))
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,9 @@ func parsePalette(th *domain.Theme, value string) error {
 	return nil
 }
 
-func parseColor(s string) (domain.RGBA, error) {
+// ParseColor reads #rrggbb, rrggbb or #rgb. It is exported because the CLI
+// parses --background with exactly the same rules a theme file uses.
+func ParseColor(s string) (domain.RGBA, error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
 	if len(s) == 3 {
 		s = string([]byte{s[0], s[0], s[1], s[1], s[2], s[2]})
