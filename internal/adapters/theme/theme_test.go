@@ -113,3 +113,83 @@ func TestSourceReportsAnUnknownTheme(t *testing.T) {
 		t.Error("Theme accepted a name it cannot resolve")
 	}
 }
+
+// ghosttyConfig is what a Ghostty *config* file usually looks like: it names
+// a theme rather than spelling one out, so it carries no literal colours at
+// all. It is by far the likeliest wrong thing to be handed to --theme,
+// because it lives at the path (~/.config/ghostty/config) a user is most
+// likely to remember.
+const ghosttyConfig = `theme = tokyonight
+font-family = JetBrains Mono
+font-size = 13
+window-padding-x = 10
+keybind = cmd+k=clear_screen
+`
+
+// TestParseRejectsAFileWithNoColours guards against the worst failure mode
+// this parser has: every key it does not recognise is skipped, so before this
+// check any file at all parsed "successfully" into the zero Theme. A zero
+// Theme has a fully transparent background and a black foreground, so
+// codeshot rendered a shadow, three traffic lights and a title floating on
+// nothing, wrote it out and exited 0. A silently wrong picture is worse than
+// an error, so a theme must at least say what its background and foreground
+// are.
+func TestParseRejectsAFileWithNoColours(t *testing.T) {
+	for _, c := range []struct{ name, body string }{
+		{"a ghostty config", ghosttyConfig},
+		{"an unrelated file", "hello, world\n"},
+		{"a foreground with no background", "foreground = #ffffff\n"},
+		{"a background with no foreground", "background = #000000\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			th, err := Parse(strings.NewReader(c.body), "x")
+			if err == nil {
+				t.Fatalf("Parse accepted a file with no usable colours, giving %+v", th)
+			}
+			if !strings.Contains(err.Error(), "ground") {
+				t.Errorf("error = %q, want it to name the missing background or foreground", err)
+			}
+		})
+	}
+}
+
+// TestSourceDistinguishesAMalformedThemeFromAMissingOne pins the second half
+// of the same problem. Source.Theme's directory scan treated any error as
+// "not here, keep looking", so a theme that was found and then failed to
+// parse came back as the generic "not embedded, not in any theme directory,
+// and not a readable file" - which sends the user hunting for a file that is
+// sitting right where they put it. Found-but-invalid has to be reported as
+// itself, immediately.
+func TestSourceDistinguishesAMalformedThemeFromAMissingOne(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tokyonight"), []byte(ghosttyConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Source{Dirs: []string{dir}}
+	_, err := s.Theme("tokyonight")
+	if err == nil {
+		t.Fatal("Theme accepted a file in a theme directory that carries no colours")
+	}
+	if strings.Contains(err.Error(), "not in any theme directory") {
+		t.Errorf("error = %q, want the parse failure itself, not the not-found message", err)
+	}
+	if !strings.Contains(err.Error(), "ground") {
+		t.Errorf("error = %q, want it to say what was wrong with the file", err)
+	}
+}
+
+// TestSourceReportsAMalformedFileGivenAsAPath is the same distinction for the
+// last resort in the chain, where the name is tried as a path.
+func TestSourceReportsAMalformedFileGivenAsAPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(ghosttyConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Source{}.Theme(path)
+	if err == nil {
+		t.Fatal("Theme accepted a path that carries no colours")
+	}
+	if strings.Contains(err.Error(), "not a readable file") {
+		t.Errorf("error = %q, want the parse failure itself; the file read fine", err)
+	}
+}
