@@ -80,31 +80,52 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 
 // fillRoundRect fills r with c, rounding every corner. Anti-aliasing comes
 // from x/image's rasteriser, so the edges hold up when the shot is scaled.
+//
+// vector.Rasterizer.Draw does not clip its rectangle argument to dst's
+// bounds - it indexes dst.Pix directly from that rectangle's corner, so an r
+// that reaches outside dst panics (or, if the arithmetic happens not to
+// panic, silently corrupts unrelated rows). r is clipped to dst.Bounds()
+// before it reaches the rasteriser; the path itself is still built from the
+// unclipped width/height so the curve's shape is unchanged; only the offset
+// of that path within the rasteriser's local coordinates shifts to account
+// for the part that got clipped away.
 func fillRoundRect(dst *image.RGBA, r image.Rectangle, radius float64, c color.RGBA) {
 	w, h := float64(r.Dx()), float64(r.Dy())
 	radius = math.Min(radius, math.Min(w, h)/2)
-	ra := vector.NewRasterizer(r.Dx(), r.Dy())
-	ra.MoveTo(float32(radius), 0)
-	ra.LineTo(float32(w-radius), 0)
-	ra.QuadTo(float32(w), 0, float32(w), float32(radius))
-	ra.LineTo(float32(w), float32(h-radius))
-	ra.QuadTo(float32(w), float32(h), float32(w-radius), float32(h))
-	ra.LineTo(float32(radius), float32(h))
-	ra.QuadTo(0, float32(h), 0, float32(h-radius))
-	ra.LineTo(0, float32(radius))
-	ra.QuadTo(0, 0, float32(radius), 0)
+	clip := r.Intersect(dst.Bounds())
+	if clip.Empty() {
+		return
+	}
+	ox, oy := float64(r.Min.X-clip.Min.X), float64(r.Min.Y-clip.Min.Y)
+	ra := vector.NewRasterizer(clip.Dx(), clip.Dy())
+	ra.MoveTo(float32(ox+radius), float32(oy))
+	ra.LineTo(float32(ox+w-radius), float32(oy))
+	ra.QuadTo(float32(ox+w), float32(oy), float32(ox+w), float32(oy+radius))
+	ra.LineTo(float32(ox+w), float32(oy+h-radius))
+	ra.QuadTo(float32(ox+w), float32(oy+h), float32(ox+w-radius), float32(oy+h))
+	ra.LineTo(float32(ox+radius), float32(oy+h))
+	ra.QuadTo(float32(ox), float32(oy+h), float32(ox), float32(oy+h-radius))
+	ra.LineTo(float32(ox), float32(oy+radius))
+	ra.QuadTo(float32(ox), float32(oy), float32(ox+radius), float32(oy))
 	ra.ClosePath()
-	ra.Draw(dst, r, image.NewUniform(c), image.Point{})
+	ra.Draw(dst, clip, image.NewUniform(c), image.Point{})
 }
 
 // kappa is the control-point distance that turns four cubic segments into a
 // circle no eye can tell from the real thing. Four quadratics give a diamond.
 const kappa = 0.5522847498
 
+// fillCircle draws a filled circle, clipped to dst's bounds for the same
+// reason fillRoundRect is: see its comment. A circle entirely outside dst
+// clips to an empty rectangle and draws nothing.
 func fillCircle(dst *image.RGBA, cx, cy, radius float64, c color.RGBA) {
 	r := image.Rect(int(cx-radius)-2, int(cy-radius)-2, int(cx+radius)+2, int(cy+radius)+2)
-	ra := vector.NewRasterizer(r.Dx(), r.Dy())
-	ox, oy := cx-float64(r.Min.X), cy-float64(r.Min.Y)
+	clip := r.Intersect(dst.Bounds())
+	if clip.Empty() {
+		return
+	}
+	ra := vector.NewRasterizer(clip.Dx(), clip.Dy())
+	ox, oy := cx-float64(clip.Min.X), cy-float64(clip.Min.Y)
 	k := radius * kappa
 	ra.MoveTo(float32(ox+radius), float32(oy))
 	ra.CubeTo(float32(ox+radius), float32(oy+k), float32(ox+k), float32(oy+radius), float32(ox), float32(oy+radius))
@@ -112,5 +133,5 @@ func fillCircle(dst *image.RGBA, cx, cy, radius float64, c color.RGBA) {
 	ra.CubeTo(float32(ox-radius), float32(oy-k), float32(ox-k), float32(oy-radius), float32(ox), float32(oy-radius))
 	ra.CubeTo(float32(ox+k), float32(oy-radius), float32(ox+radius), float32(oy-k), float32(ox+radius), float32(oy))
 	ra.ClosePath()
-	ra.Draw(dst, r, image.NewUniform(c), image.Point{})
+	ra.Draw(dst, clip, image.NewUniform(c), image.Point{})
 }
