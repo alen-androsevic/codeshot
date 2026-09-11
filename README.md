@@ -25,50 +25,19 @@ omitted, codeshot derives one from the command (`ls -la` becomes
 `ls-la.png`) and steps around whatever is already in the gallery rather than
 overwriting it.
 
-Flags for `render`:
-
-```
---command <text>     the command line to show above the output
---cwd <path>         the directory to show in the prompt
---cols <n>           terminal width the dump was produced at (default 100)
---rows <n>           crop to this many lines (0 keeps them all)
---tail               crop from the bottom instead of the top
---no-prompt          leave out the prompt and command lines
---theme <name|path>  codeshot-dark, codeshot-light, or a Ghostty theme file
---title <text>       window title (default: the command)
---                   end the flags; what follows is positional
---no-title           draw no title
---controls <style>   macos, linux or none (default macos)
---scale <n>          pixel scale, at least 1 (default 2)
---padding <n>        pixels around the grid (default 14)
---margin <n>         pixels around the window (default 64, 0 with --no-shadow)
---no-shadow          drop the drop shadow
---background <hex>   fill the margin instead of leaving it transparent
---font-size <n>      points (default 13)
---line-height <f>    multiple of the font's own height (default 1.0)
---gallery <dir>      where bare names are stored (default ~/Codeshots)
---debug              report every escape sequence the emulator ignored
-```
-
-The window title defaults to the command you passed with `--command`. If a
-program set a title of its own with an escape sequence, that is used only
-when no command is known — a shell's `alen@host: ~/code` should not end up
-captioning a picture of `make build`.
-
-The margin is the transparent border the drop shadow spreads into, so
-`--no-shadow` drops it to 0 unless you ask for one explicitly.
+See [USAGE.md](USAGE.md) for worked examples, and `codeshot render --help`
+for the full flag list.
 
 A dump's lines need to be terminated the way a real pty would have sent them
 (`\r\n`, not a bare `\n`) - codeshot's terminal emulator treats a line feed
 exactly as a real terminal does, moving the cursor down without returning it
 to column one, and a file assembled by plain shell redirection (`cmd > file`)
-never passes through a pty to pick up that translation. `script` (or the
-wrapper below) captures it correctly.
+never passes through a pty to pick up that translation. `script` captures it
+correctly, and codeshot warns when it is handed a dump that looks redirected.
 
 **Coming in phase 2**: a wrapper that runs your command for you and captures
 it live - `codeshot shot.png -- npm test` - so you never have to make your
-own dump. This phase only has `render`, which is the half of the pipeline
-that exists without a pty in the picture.
+own dump. See [plan.md](plan.md).
 
 ## Themes and fonts
 
