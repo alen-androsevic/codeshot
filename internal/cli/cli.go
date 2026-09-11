@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -79,30 +80,103 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func render(args []string, stdout, stderr io.Writer) int {
-	// Help is intercepted before flag.FlagSet ever sees it. Left to the
-	// FlagSet, ContinueOnError returns ErrHelp only *after* printing its own
-	// dump of single-dash flags with empty descriptions, and render exits 2 -
-	// so the usage block above, which spells the flags the way the README
-	// does, was unreachable. A -- ends the search: phase 2 hands everything
-	// after it to a child command, whose own --help is not codeshot's.
+	if wantsHelp(args) {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
+	opts, positional, err := parse("render", args, stderr)
+	if err != nil {
+		return usageExit(stderr, err)
+	}
+	if len(positional) == 0 {
+		fmt.Fprint(stderr, "codeshot: render needs a file to read\n")
+		return 2
+	}
+	name := ""
+	if len(positional) > 1 {
+		name = positional[1]
+	}
+	reporter := report.Writer{Err: stderr}
+	service, err := opts.build(file.Source{
+		Path:    positional[0],
+		Command: opts.command,
+		Cwd:     opts.cwd,
+		Cols:    opts.cols,
+		Warn:    reporter.Warn,
+	}, reporter)
+	if err != nil {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+		return 1
+	}
+	if _, err := service.Run(opts.request(name)); err != nil {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// wantsHelp reports whether the caller asked for the usage block, stopping at
+// a --. Help is intercepted before flag.FlagSet ever sees it: left to the
+// FlagSet, ContinueOnError returns ErrHelp only *after* printing its own dump
+// of single-dash flags with empty descriptions, so the usage block above -
+// which spells the flags the way the README does - was unreachable. The -- is
+// where codeshot's arguments end and a child command's begin, and that
+// command's own --help is not codeshot's to answer.
+func wantsHelp(args []string) bool {
 	for _, a := range args {
 		if a == "--" {
-			break
+			return false
 		}
 		if a == "-h" || a == "--help" || a == "help" {
-			fmt.Fprint(stdout, usage)
-			return 0
+			return true
 		}
 	}
-	fs := flag.NewFlagSet("render", flag.ContinueOnError)
+	return false
+}
+
+// errReported stands for a failure the flag package has already written to
+// stderr. Printing "codeshot: <it>" afterwards would say the same thing
+// twice.
+var errReported = errors.New("reported")
+
+func usageExit(stderr io.Writer, err error) int {
+	if !errors.Is(err, errReported) {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+	}
+	return 2
+}
+
+// options is every flag, parsed and validated. It exists so that the two
+// modes that take the same flags - a saved dump and a command codeshot runs
+// itself - share one definition of what those flags mean and one set of
+// checks, and differ only in the CaptureSource they build.
+type options struct {
+	command    string
+	cwd        string
+	cols       int
+	rows       int
+	tail       bool
+	noPrompt   bool
+	theme      string
+	fontSize   float64
+	lineHeight float64
+	gallery    string
+	debug      bool
+	chrome     domain.Chrome
+}
+
+// parse turns argv into options and the positional arguments left over. Every
+// error it returns is a mistake in what the caller typed, and exits 2.
+func parse(mode string, args []string, stderr io.Writer) (options, []string, error) {
+	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
 		command = fs.String("command", "", "")
 		cwd     = fs.String("cwd", "", "")
 		// --cols has no default of its own on purpose. vt.Adapter already
 		// falls back to 100 for a capture that never learned its width, and
-		// repeating that number here would leave phase 2 - which sizes the
-		// pty from stderr - unable to tell "not set" from "set to 100".
+		// repeating that number here would leave wrapper mode - which sizes
+		// the pty from stderr - unable to tell "not set" from "set to 100".
 		cols       = fs.Int("cols", 0, "")
 		rows       = fs.Int("rows", 0, "")
 		tail       = fs.Bool("tail", false, "")
@@ -125,13 +199,9 @@ func render(args []string, stdout, stderr io.Writer) int {
 	// do on its own, so the positionals are lifted out first.
 	positional, flags := split(args)
 	if err := fs.Parse(flags); err != nil {
-		return 2
+		return options{}, nil, errReported
 	}
 	named := namedFlags(fs)
-	if len(positional) == 0 {
-		fmt.Fprint(stderr, "codeshot: render needs a file to read\n")
-		return 2
-	}
 
 	chrome := domain.DefaultChrome()
 	chrome.Scale = *scale
@@ -157,63 +227,67 @@ func render(args []string, stdout, stderr io.Writer) int {
 	case "none":
 		chrome.Controls = domain.ControlsNone
 	default:
-		fmt.Fprintf(stderr, "codeshot: --controls %q is not macos, linux or none\n", *controls)
-		return 2
+		return options{}, nil, fmt.Errorf("--controls %q is not macos, linux or none", *controls)
 	}
 	if *scale < 1 {
-		fmt.Fprintf(stderr, "codeshot: --scale must be at least 1, got %d\n", *scale)
-		return 2
+		return options{}, nil, fmt.Errorf("--scale must be at least 1, got %d", *scale)
 	}
 	if *background != "" {
 		c, err := theme.ParseColor(*background)
 		if err != nil {
-			fmt.Fprintf(stderr, "codeshot: --background: %v\n", err)
-			return 2
+			return options{}, nil, fmt.Errorf("--background: %w", err)
 		}
 		chrome.Background = &c
 	}
 
+	return options{
+		command:    *command,
+		cwd:        *cwd,
+		cols:       *cols,
+		rows:       *rows,
+		tail:       *tail,
+		noPrompt:   *noPrompt,
+		theme:      *themeName,
+		fontSize:   *fontSize,
+		lineHeight: *lineHeight,
+		gallery:    *galleryDir,
+		debug:      *debug,
+		chrome:     chrome,
+	}, positional, nil
+}
+
+// build wires the adapters around a source. It is the composition root: the
+// one place that knows which concrete implementation stands behind each port.
+// An error here is codeshot failing at its own job, not the caller mistyping,
+// and exits 1.
+func (o options) build(src app.CaptureSource, reporter report.Writer) (app.Service, error) {
 	set, err := fonts.Embedded()
 	if err != nil {
-		fmt.Fprintf(stderr, "codeshot: %v\n", err)
-		return 1
+		return app.Service{}, err
 	}
-	reporter := report.Writer{Err: stderr}
 	emulator := vt.Adapter{}
-	if *debug {
+	if o.debug {
 		emulator.Unknown = func(seq string) { reporter.Warn("ignored " + seq) }
 	}
-
-	name := ""
-	if len(positional) > 1 {
-		name = positional[1]
-	}
-	service := app.Service{
-		Source: file.Source{
-			Path:    positional[0],
-			Command: *command,
-			Cwd:     *cwd,
-			Cols:    *cols,
-			Warn:    reporter.Warn,
-		},
+	return app.Service{
+		Source:  src,
 		Emu:     emulator,
 		Prompt:  prompt.Template{},
 		Themes:  theme.Source{},
-		Render:  raster.New(set, raster.Options{FontSize: *fontSize, LineHeight: *lineHeight}),
-		Gallery: gallery.FS{Dir: *galleryDir},
+		Render:  raster.New(set, raster.Options{FontSize: o.fontSize, LineHeight: o.lineHeight}),
+		Gallery: gallery.FS{Dir: o.gallery},
 		Report:  reporter,
-	}
-	if _, err := service.Run(app.Request{
+	}, nil
+}
+
+func (o options) request(name string) app.Request {
+	return app.Request{
 		Name:     name,
-		Theme:    *themeName,
-		NoPrompt: *noPrompt,
-		Frame:    domain.FrameOptions{Rows: *rows, Tail: *tail},
-		Chrome:   chrome,
-	}); err != nil {
-		fmt.Fprintf(stderr, "codeshot: %v\n", err)
-		return 1
+		Theme:    o.theme,
+		NoPrompt: o.noPrompt,
+		Frame:    domain.FrameOptions{Rows: o.rows, Tail: o.tail},
+		Chrome:   o.chrome,
 	}
-	return 0
 }
 
 // namedFlags reports which flags the caller actually wrote out, which
