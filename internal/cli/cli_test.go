@@ -23,7 +23,7 @@ func TestRenderWritesAShot(t *testing.T) {
 	src := writeANSI(t)
 	out := filepath.Join(t.TempDir(), "shot.png")
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", src, out, "--command", "echo hello"}, &stdout, &stderr)
+	code := Run([]string{"render", src, out, "--command", "echo hello"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -37,7 +37,7 @@ func TestRenderWritesAShot(t *testing.T) {
 
 func TestRenderRejectsAnUnknownTheme(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--theme", "no-such"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--theme", "no-such"}, nil, &stdout, &stderr)
 	if code == 0 {
 		t.Error("exit 0 for an unknown theme")
 	}
@@ -48,7 +48,7 @@ func TestRenderRejectsAnUnknownTheme(t *testing.T) {
 
 func TestRenderRejectsAMissingFile(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"render", "/no/such/file.ansi"}, &stdout, &stderr); code == 0 {
+	if code := Run([]string{"render", "/no/such/file.ansi"}, nil, &stdout, &stderr); code == 0 {
 		t.Error("exit 0 for a missing input file")
 	}
 }
@@ -62,7 +62,7 @@ func TestRenderRejectsAMissingFile(t *testing.T) {
 // code must be exactly 2 (a usage error), not merely nonzero.
 func TestRenderRejectsScaleBelowOne(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--scale", "0"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir(), "--scale", "0"}, nil, &stdout, &stderr)
 	if code != 2 {
 		t.Errorf("exit %d, want 2 for a usage error", code)
 	}
@@ -92,7 +92,7 @@ func writeANSIWithoutCarriageReturns(t *testing.T) string {
 // that and a silently wrong picture.
 func TestRenderWarnsAboutMissingCarriageReturns(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSIWithoutCarriageReturns(t), "x.png", "--gallery", t.TempDir()}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSIWithoutCarriageReturns(t), "x.png", "--gallery", t.TempDir()}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -109,7 +109,7 @@ func TestRenderWarnsAboutMissingCarriageReturns(t *testing.T) {
 // same as a real pty would produce, so nothing should be said about it.
 func TestRenderDoesNotWarnForANormalCRLFDump(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir()}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "x.png", "--gallery", t.TempDir()}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -120,21 +120,21 @@ func TestRenderDoesNotWarnForANormalCRLFDump(t *testing.T) {
 
 func TestHelpAndVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"--help"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"--help"}, nil, &stdout, &stderr); code != 0 {
 		t.Errorf("--help exited %d", code)
 	}
 	if !strings.Contains(stdout.String(), "codeshot") {
 		t.Errorf("help = %q", stdout.String())
 	}
 	stdout.Reset()
-	if code := Run([]string{"version"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"version"}, nil, &stdout, &stderr); code != 0 {
 		t.Errorf("version exited %d", code)
 	}
 }
 
 func TestThemesListsWhatIsEmbedded(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	Run([]string{"themes"}, &stdout, &stderr)
+	Run([]string{"themes"}, nil, &stdout, &stderr)
 	for _, want := range []string{"codeshot-dark", "codeshot-light"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("themes output %q is missing %s", stdout.String(), want)
@@ -144,7 +144,7 @@ func TestThemesListsWhatIsEmbedded(t *testing.T) {
 
 func TestNoArgumentsExplainsItself(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run(nil, &stdout, &stderr); code == 0 {
+	if code := Run(nil, nil, &stdout, &stderr); code == 0 {
 		t.Error("exit 0 with no arguments")
 	}
 	if !strings.Contains(stderr.String(), "render") {
@@ -162,7 +162,7 @@ func TestNoArgumentsExplainsItself(t *testing.T) {
 func TestBareDoubleDashTerminatesTheFlags(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"render", writeANSI(t), "--gallery", dir, "--", "name.png"}, &stdout, &stderr)
+	code := Run([]string{"render", writeANSI(t), "--gallery", dir, "--", "name.png"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -185,7 +185,7 @@ func TestTheSuiteNeverWritesOutsideItsOwnGallery(t *testing.T) {
 	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
 	entries, err := os.ReadDir(home)
@@ -205,7 +205,7 @@ func renderedWidth(t *testing.T, extra ...string) int {
 	dir := t.TempDir()
 	args := append([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, extra...)
 	var stdout, stderr bytes.Buffer
-	if code := Run(args, &stdout, &stderr); code != 0 {
+	if code := Run(args, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
 	f, err := os.Open(filepath.Join(dir, "shot.png"))
@@ -255,7 +255,7 @@ func TestRenderHelpPrintsTheDocumentedUsage(t *testing.T) {
 	for _, arg := range []string{"-h", "--help"} {
 		t.Run(arg, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := Run([]string{"render", arg}, &stdout, &stderr); code != 0 {
+			if code := Run([]string{"render", arg}, nil, &stdout, &stderr); code != 0 {
 				t.Errorf("exit %d, want 0; asking for help is not an error", code)
 			}
 			if !strings.Contains(stdout.String(), "--gallery") {
@@ -284,5 +284,167 @@ func TestColsDefaultsToTheEmulatorsOwnFallback(t *testing.T) {
 	}
 	if forty := renderedWidth(t, "--cols", "40"); forty >= unset {
 		t.Errorf("--cols 40 gave width %d, want less than the %d the default gives", forty, unset)
+	}
+}
+
+// runWrapped runs codeshot in wrapper mode against a fresh gallery, with no stdin
+// and a stderr that is not a terminal, so the pty is 100x24 whatever
+// terminal the suite itself is running in.
+func runWrapped(t *testing.T, args ...string) (code int, dir, stdout, stderr string) {
+	t.Helper()
+	dir = t.TempDir()
+	var out, errb bytes.Buffer
+	code = Run(append([]string{"--gallery", dir}, args...), nil, &out, &errb)
+	return code, dir, out.String(), errb.String()
+}
+
+func shots(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// TestWrapperTakesAPictureOfTheCommand is the goal of phase 2 in one line:
+// `codeshot -- ls -la` runs ls, shows its output as it happens, and leaves
+// ls-la.png in the gallery, with no dump to make first.
+func TestWrapperTakesAPictureOfTheCommand(t *testing.T) {
+	code, dir, stdout, stderr := runWrapped(t, "--", "echo", "hello")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if stdout != "hello\r\n" {
+		t.Errorf("stdout = %q, want the command's output passed through", stdout)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "echo-hello.png" {
+		t.Errorf("gallery = %v, want the shot named after the command", got)
+	}
+	if !strings.Contains(stderr, "Stored codeshot in") {
+		t.Errorf("stderr = %q, want the stored line there and not on stdout", stderr)
+	}
+}
+
+func TestWrapperHonoursAName(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "shot.png", "--", "true")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "shot.png" {
+		t.Errorf("gallery = %v, want shot.png", got)
+	}
+}
+
+// TestWrapperLeavesTheCommandsArgumentsAlone: after the --, nothing is
+// codeshot's. -la is ls's flag and --help is echo's argument, and neither
+// may be parsed, rejected or answered by codeshot on the child's behalf.
+func TestWrapperLeavesTheCommandsArgumentsAlone(t *testing.T) {
+	code, _, stdout, stderr := runWrapped(t, "--", "echo", "-la", "--help", "--gallery")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if stdout != "-la --help --gallery\r\n" {
+		t.Errorf("stdout = %q, want echo to have received its own arguments", stdout)
+	}
+}
+
+func TestWrapperFlagsReachThePty(t *testing.T) {
+	code, _, stdout, stderr := runWrapped(t, "--cols", "40", "--", "stty", "size")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if stdout != "24 40\r\n" {
+		t.Errorf("stty size = %q, want --cols to have sized the pty", stdout)
+	}
+}
+
+// TestWrapperCommandOverridesWhatThePromptShows is for the command line that
+// should not be in a picture: `codeshot --command deploy -- deploy
+// --token=...` keeps the token out of the image and out of the filename.
+func TestWrapperCommandOverridesWhatThePromptShows(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "--command", "deploy", "--", "echo", "--token=s3cret")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "deploy.png" {
+		t.Errorf("gallery = %v, want the name taken from --command, not the real argv", got)
+	}
+}
+
+// TestWrapperExitsWithTheChildsCode makes codeshot drop-in: `codeshot --
+// make test && deploy` must not deploy when the tests failed. A failing run is
+// still worth a picture - often it is the picture people want - so the shot
+// is taken either way.
+func TestWrapperExitsWithTheChildsCode(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "--", "sh", "-c", "echo boom; exit 3")
+	if code != 3 {
+		t.Errorf("exit %d, want the child's 3; stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 {
+		t.Errorf("gallery = %v, want the failing run pictured too", got)
+	}
+}
+
+func TestWrapperOfAMissingCommandIs127(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "--", "codeshot-no-such-command")
+	if code != 127 {
+		t.Errorf("exit %d, want 127 as a shell would", code)
+	}
+	if !strings.Contains(stderr, "codeshot-no-such-command: command not found") {
+		t.Errorf("stderr = %q, want a shell-style message", stderr)
+	}
+	if got := shots(t, dir); len(got) != 0 {
+		t.Errorf("gallery = %v, want no picture of a command that never ran", got)
+	}
+}
+
+// TestWrapperChildsFailureOutranksCodeshots settles an ambiguity in design
+// §10, which says both "exit with the child's code" and "a codeshot failure
+// exits 1". When both happen, the child's code wins: a script gating on
+// `codeshot -- make test` must see the tests fail, not a theme typo. Only a
+// clean child with a failed picture exits 1.
+func TestWrapperChildsFailureOutranksCodeshots(t *testing.T) {
+	code, _, _, stderr := runWrapped(t, "--theme", "no-such", "--", "sh", "-c", "exit 3")
+	if code != 3 {
+		t.Errorf("failed child, failed picture: exit %d, want the child's 3", code)
+	}
+	if !strings.Contains(stderr, "no-such") {
+		t.Errorf("stderr = %q, want the picture's failure still reported", stderr)
+	}
+	if code, _, _, _ := runWrapped(t, "--theme", "no-such", "--", "true"); code != 1 {
+		t.Errorf("clean child, failed picture: exit %d, want 1", code)
+	}
+}
+
+func TestWrapperNeedsACommand(t *testing.T) {
+	for _, args := range [][]string{{"shot.png"}, {"shot.png", "--"}} {
+		code, _, _, stderr := runWrapped(t, args...)
+		if code != 2 {
+			t.Errorf("%v: exit %d, want a usage error", args, code)
+		}
+		if !strings.Contains(stderr, "--") {
+			t.Errorf("%v: stderr = %q, want it to point at --", args, stderr)
+		}
+	}
+}
+
+func TestWrapperTakesOneNameAtMost(t *testing.T) {
+	if code, _, _, stderr := runWrapped(t, "one.png", "two.png", "--", "true"); code != 2 {
+		t.Errorf("exit %d, want a usage error; stderr: %s", code, stderr)
+	}
+}
+
+func TestWrapperStillAnswersItsOwnHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--help", "--", "true"}, nil, &stdout, &stderr); code != 0 {
+		t.Errorf("exit %d", code)
+	}
+	if !strings.Contains(stdout.String(), "-- <command>") {
+		t.Errorf("stdout = %q, want the usage block to document the wrapper", stdout.String())
 	}
 }

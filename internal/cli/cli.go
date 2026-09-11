@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"codeshot/internal/adapters/capture/file"
+	"codeshot/internal/adapters/capture/pty"
 	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/gallery"
 	"codeshot/internal/adapters/prompt"
@@ -29,20 +30,25 @@ var Version = "dev"
 const usage = `codeshot - a picture of a command and what it printed
 
 Usage:
-  codeshot render <file.ansi> [name] [flags]   render a saved ANSI dump
-  codeshot themes                              list the embedded themes
+  codeshot [name] [flags] -- <command> [args...]   run a command and picture it
+  codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
+  codeshot themes                                  list the embedded themes
   codeshot version
 
-Flags for render:
-  --command <text>     the command line to show above the output
+With no name, the shot is named after the command (ls -la -> ls-la.png) and
+stored in the gallery. A name with a / in it is a path. Everything after --
+belongs to the command. codeshot exits with the command's own status.
+
+Flags:
+  --command <text>     the command line shown after the prompt (default: the
+                       command that ran; render has none unless given)
   --cwd <path>         the directory to show in the prompt
-  --cols <n>           terminal width the dump was produced at (default 100)
+  --cols <n>           terminal width (default: your terminal's, or 100)
   --rows <n>           crop to this many lines (0 keeps them all)
   --tail               crop from the bottom instead of the top
   --no-prompt          leave out the prompt and command lines
   --theme <name|path>  codeshot-dark, codeshot-light, or a Ghostty theme file
   --title <text>       window title (default: the command)
-  --                   end the flags; what follows is positional
   --no-title           draw no title
   --controls <style>   macos, linux or none (default macos)
   --scale <n>          pixel scale, at least 1 (default 2)
@@ -56,9 +62,12 @@ Flags for render:
   --debug              report every escape sequence the emulator ignored
 `
 
-func Run(args []string, stdout, stderr io.Writer) int {
+// Run is codeshot from argv to exit code. stdin is an *os.File rather than an
+// io.Reader because wrapper mode puts it into raw mode when it is a terminal,
+// which is something done to a file descriptor; nil forwards nothing.
+func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, "codeshot: nothing to do; try `codeshot render <file.ansi>`\n")
+		fmt.Fprint(stderr, "codeshot: nothing to do; try `codeshot -- <command>` or `codeshot render <file.ansi>`\n")
 		return 2
 	}
 	switch args[0] {
@@ -73,10 +82,87 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "render":
 		return render(args[1:], stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "codeshot: unknown command %q; try `codeshot --help`\n", args[0])
+	}
+	// Anything that is not a subcommand is wrapper mode: a name, flags, or
+	// the -- itself. The subcommands are matched first so that `codeshot
+	// render x.ansi -- name.png` keeps the meaning it has always had.
+	return wrap(args, stdin, stdout, stderr)
+}
+
+// wrap runs a command under a pty and pictures it. Its exit code is the
+// child's: codeshot in front of a command must not change what a script
+// gating on that command sees.
+func wrap(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+	before, argv, found := cutAtDoubleDash(args)
+	if wantsHelp(before) {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
+	if !found || len(argv) == 0 {
+		fmt.Fprint(stderr, "codeshot: nothing to run; put the command after --, as in "+
+			"`codeshot [name] -- ls -la` (reading output from a pipe is not supported yet)\n")
 		return 2
 	}
+	opts, positional, err := parse("codeshot", before, stderr)
+	if err != nil {
+		return usageExit(stderr, err)
+	}
+	if len(positional) > 1 {
+		fmt.Fprintf(stderr, "codeshot: one name at most before --, got %q\n", positional)
+		return 2
+	}
+	name := ""
+	if len(positional) == 1 {
+		name = positional[0]
+	}
+	reporter := report.Writer{Err: stderr}
+	// Everything that can fail before the child runs fails here, while
+	// failing still costs nothing: no command has been run for nothing.
+	service, err := opts.build(pty.Source{
+		Argv:    argv,
+		Command: opts.command,
+		Cwd:     opts.cwd,
+		Cols:    opts.cols,
+		Stdin:   stdin,
+		Stdout:  stdout,
+		Size:    fileOf(stderr),
+	}, reporter)
+	if err != nil {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+		return 1
+	}
+	out, err := service.Run(opts.request(name))
+	if err != nil {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+		// The child's failure outranks codeshot's. Design §10 says both
+		// "exit with the child's code" and "a codeshot failure exits 1"; when
+		// both happen, a script gating on `codeshot -- make test` must see
+		// the tests fail, not a theme typo. Only a clean child with a lost
+		// picture exits 1.
+		if out.ExitCode != 0 {
+			return out.ExitCode
+		}
+		return 1
+	}
+	return out.ExitCode
+}
+
+// cutAtDoubleDash splits argv at the first --: codeshot's arguments before
+// it, the command's after. found reports whether there was a -- at all.
+func cutAtDoubleDash(args []string) (before, after []string, found bool) {
+	for i, a := range args {
+		if a == "--" {
+			return args[:i], args[i+1:], true
+		}
+	}
+	return args, nil, false
+}
+
+// fileOf is the *os.File behind w, when there is one. The pty is sized from
+// stderr, and a stderr that is a buffer - in a test - has no size to give.
+func fileOf(w io.Writer) *os.File {
+	f, _ := w.(*os.File)
+	return f
 }
 
 func render(args []string, stdout, stderr io.Writer) int {

@@ -46,3 +46,20 @@ func TestRawIsANoOpOffATerminal(t *testing.T) {
 	restore()
 	restore()
 }
+
+// TestANilFileIsNotATerminal lets a caller that has no *os.File to offer -
+// the CLI's tests hand it a bytes.Buffer for stderr - pass nil and get the
+// fallback, rather than the size of whatever terminal is running the suite.
+func TestANilFileIsNotATerminal(t *testing.T) {
+	if cols, rows := Size(nil); cols != 100 || rows != 24 {
+		t.Errorf("Size(nil) = %dx%d, want the fallback", cols, rows)
+	}
+	if IsTerminal(nil) {
+		t.Error("IsTerminal(nil) = true")
+	}
+	restore, err := Raw(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore()
+}

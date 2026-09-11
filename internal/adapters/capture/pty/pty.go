@@ -40,18 +40,25 @@ const (
 type Source struct {
 	// Argv is the command and its arguments, exactly as given after --.
 	Argv []string
+	// Command replaces the command line the prompt shows and the shot is
+	// named after. Empty means Argv, quoted back into a command line. It is
+	// for what should not be in a picture: a token in an argument, say.
+	Command string
 	// Cwd is the directory the prompt line shows; empty means the real one.
 	// The child always runs where codeshot was started.
 	Cwd string
 	// Cols fixes the pty's width. Zero follows the terminal behind Size.
 	Cols int
-	// Stdin is forwarded to the child, and put into raw mode for the length
-	// of the run when it is a terminal. Nil forwards nothing.
+	// Stdin, when it is a terminal, is put into raw mode for the length of
+	// the run and forwarded to the child through the pty. Anything else is
+	// handed to the child as its stdin directly. Nil gives the child the pty
+	// with nothing to read.
 	Stdin *os.File
 	// Stdout is where the child's output passes through live.
 	Stdout io.Writer
 	// Size is the terminal the pty's size is copied from and whose resizes it
 	// follows. The CLI hands over stderr: stdout is the one people redirect.
+	// Nil, or anything that is not a terminal, gets design §8's 100x24.
 	Size *os.File
 	// Env is the child's environment; nil means codeshot's own.
 	Env []string
@@ -61,7 +68,10 @@ func (s Source) Capture() (domain.Capture, error) {
 	if len(s.Argv) == 0 {
 		return domain.Capture{}, errors.New("no command to run")
 	}
-	command := shellJoin(s.Argv)
+	command := s.Command
+	if command == "" {
+		command = shellJoin(s.Argv)
+	}
 	cwd := s.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -78,7 +88,21 @@ func (s Source) Capture() (domain.Capture, error) {
 
 	cmd := exec.Command(s.Argv[0], s.Argv[1:]...)
 	cmd.Env = childEnv(s.Env)
-	ptmx, err := creack.StartWithSize(cmd, size.winsize())
+	// A stdin that is not a terminal - `< file`, or a pipe - goes to the
+	// child directly. The pty's line discipline is for a person typing: it
+	// echoes input into the picture, turns a 0x03 byte into SIGINT, and on
+	// macOS truncates a line past 1024 bytes. A file is not a person typing,
+	// and the child reading it directly sees the truth about it too: that
+	// stdin is not a tty. Output stays on the pty, and output is what decides
+	// colour. creack only fills in the streams left nil.
+	interactive := s.Stdin != nil && tty.IsTerminal(s.Stdin)
+	if s.Stdin != nil && !interactive {
+		cmd.Stdin = s.Stdin
+	}
+	// The child leads a new session with the pty as its controlling
+	// terminal. That is taken from fd 1, which is always the pty, because fd
+	// 0 may now be a file.
+	ptmx, err := creack.StartWithAttrs(cmd, size.winsize(), &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1})
 	if err != nil {
 		return domain.Capture{ExitCode: startFailureCode(err)}, fmt.Errorf("%s: %w", s.Argv[0], unwrapStart(err))
 	}
@@ -113,15 +137,16 @@ func (s Source) Capture() (domain.Capture, error) {
 		}
 	}()
 
-	if s.Stdin != nil {
+	if interactive {
 		// Raw mode is what lets every keystroke - ^C, arrows, a bare
 		// letter - reach the child untranslated, with the pty's own line
 		// discipline doing the cooking. Failing to get it is not worth
 		// failing the run for; the child still runs, only less
-		// interactively.
+		// interactively. A terminal never reaches end-of-file, so the copy
+		// ends only when codeshot does.
 		restore, _ := tty.Raw(s.Stdin)
 		defer restore()
-		go forwardStdin(ptmx, s.Stdin)
+		go io.Copy(ptmx, s.Stdin)
 	}
 
 	var captured bytes.Buffer
@@ -157,12 +182,7 @@ type windowSize struct {
 }
 
 func (w *windowSize) follow(f *os.File) {
-	cols, rows := 0, 0
-	if f != nil {
-		cols, rows = tty.Size(f)
-	} else {
-		cols, rows = tty.Size(os.Stderr)
-	}
+	cols, rows := tty.Size(f)
 	if w.fixedCols > 0 {
 		cols = w.fixedCols
 	}
@@ -199,36 +219,6 @@ func (t *tee) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
-}
-
-// forwardStdin copies stdin into the pty and, when stdin runs out, says so
-// the way a terminal does: a pty has no write end to close, so the child
-// would otherwise wait forever for input nobody will type. ^D ends input only
-// at the start of a line - part-way through one it just hands over what is
-// buffered - so a last line with no newline gets a second.
-func forwardStdin(ptmx *os.File, stdin *os.File) {
-	w := &lastByte{w: ptmx}
-	if _, err := io.Copy(w, stdin); err != nil {
-		return
-	}
-	eof := []byte{4}
-	if w.seen && w.last != '\n' {
-		eof = []byte{4, 4}
-	}
-	ptmx.Write(eof)
-}
-
-type lastByte struct {
-	w    io.Writer
-	last byte
-	seen bool
-}
-
-func (l *lastByte) Write(p []byte) (int, error) {
-	if len(p) > 0 {
-		l.last, l.seen = p[len(p)-1], true
-	}
-	return l.w.Write(p)
 }
 
 // exitCode turns what Wait said into what a shell would have put in $?. A

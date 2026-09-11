@@ -3,6 +3,7 @@ package pty
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -160,36 +161,68 @@ func TestCaptureOfNothingIsAnError(t *testing.T) {
 	}
 }
 
-// TestCaptureForwardsStdinAndItsEnd: a command reading stdin gets it, and
-// when stdin runs out the child sees end-of-file rather than waiting forever
-// on a terminal that will never type again. A pty has no "close the write
-// end"; a ^D at the start of a line is how a terminal says it.
-func TestCaptureForwardsStdinAndItsEnd(t *testing.T) {
-	in := filepath.Join(t.TempDir(), "in")
-	if err := os.WriteFile(in, []byte("hello\npartial"), 0o644); err != nil {
+func stdinFrom(t *testing.T, content string) *os.File {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stdin")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stdin, err := os.Open(in)
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
+	t.Cleanup(func() { f.Close() })
+	return f
+}
 
+// runWithin fails the test instead of hanging it when a child waits forever
+// on a stdin that will never end.
+func runWithin(t *testing.T, src Source) string {
+	t.Helper()
 	done := make(chan string, 1)
 	go func() {
-		got, _ := run(t, Source{Argv: []string{"sh", "-c", `wc -l | tr -d ' '`}, Stdin: stdin})
+		got, _ := run(t, src)
 		done <- got
 	}()
 	select {
 	case got := <-done:
-		// The line discipline echoes what it is fed, so the input appears
-		// too; what matters is that wc saw both lines end and counted one
-		// newline, which it only prints after end-of-file.
-		if !strings.HasSuffix(got, "1\r\n") {
-			t.Errorf("Bytes = %q, want wc's count after the echoed input", got)
-		}
+		return got
 	case <-time.After(5 * time.Second):
-		t.Fatal("the child never saw end-of-file on its stdin")
+		t.Fatal("the child never saw the end of its stdin")
+		return ""
+	}
+}
+
+// TestCaptureHandsANonTerminalStdinStraightOver: `codeshot -- cmd < file`
+// and `producer | codeshot -- cmd` give the child their stdin directly, not
+// through the pty. A pty's line discipline is for a person typing - it
+// echoes, it turns a 0x03 byte into SIGINT, and on macOS it truncates any
+// line past 1024 bytes - and a file is not a person typing. The input must
+// not appear in the picture, and must arrive whole.
+func TestCaptureHandsANonTerminalStdinStraightOver(t *testing.T) {
+	got := runWithin(t, Source{Argv: []string{"cat"}, Stdin: stdinFrom(t, "hello\n")})
+	if got != "hello\r\n" {
+		t.Errorf("Bytes = %q, want cat's output once and no echo of its input", got)
+	}
+
+	long := strings.Repeat("a", 5000)
+	got = runWithin(t, Source{Argv: []string{"sh", "-c", "wc -c | tr -d ' '"}, Stdin: stdinFrom(t, long)})
+	if got != "5000\r\n" {
+		t.Errorf("wc -c = %q, want all 5000 bytes of a line with no newline", got)
+	}
+
+	got = runWithin(t, Source{Argv: []string{"sh", "-c", "wc -c | tr -d ' '"}, Stdin: stdinFrom(t, "a\x03b\x04c")})
+	if got != "5\r\n" {
+		t.Errorf("wc -c = %q, want control bytes delivered as data, not as signals or EOF", got)
+	}
+}
+
+// TestCaptureKeepsTheChildsOutputOnThePty: with stdin handed over directly,
+// stdout and stderr are still the terminal, which is what decides colour.
+func TestCaptureKeepsTheChildsOutputOnThePty(t *testing.T) {
+	got := runWithin(t, Source{Argv: []string{"sh", "-c", `[ -t 1 ] && [ -t 2 ] && echo tty`}, Stdin: stdinFrom(t, "")})
+	if got != "tty\r\n" {
+		t.Errorf("Bytes = %q; the child's output is not on a terminal", got)
 	}
 }
 
@@ -265,5 +298,83 @@ func TestCaptureForwardsAResize(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the resize never reached the child")
+	}
+}
+
+func TestCaptureCommandOverridesTheCommandLine(t *testing.T) {
+	var out bytes.Buffer
+	c, err := Source{Argv: []string{"echo", "--token=s3cret"}, Command: "deploy", Stdout: &out}.Capture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Command != "deploy" {
+		t.Errorf("Command = %q, want the override", c.Command)
+	}
+}
+
+// sttySettings is the terminal's full configuration as `stty -g` prints it,
+// which is an exact enough fingerprint to tell whether raw mode was undone.
+func sttySettings(t *testing.T, f *os.File) string {
+	t.Helper()
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = f
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestCaptureForwardsKeystrokesAndRestoresTheTerminal is the interactive
+// path: a user at a real terminal types to the child through codeshot, and
+// gets their terminal back exactly as it was when the child is done.
+func TestCaptureForwardsKeystrokesAndRestoresTheTerminal(t *testing.T) {
+	keyboard, userTty, err := creack.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keyboard.Close()
+	defer userTty.Close()
+	before := sttySettings(t, userTty)
+
+	w := &signalledWriter{first: make(chan struct{})}
+	done := make(chan error, 1)
+	var got string
+	go func() {
+		c, err := Source{
+			Argv:   []string{"sh", "-c", `echo ready; read line; echo "got $line"`},
+			Stdin:  userTty,
+			Stdout: w,
+		}.Capture()
+		got = string(c.Bytes)
+		done <- err
+	}()
+	select {
+	case <-w.first:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the child never started")
+	}
+	// Without this, a Raw that did nothing would pass the restore check
+	// below for free.
+	if during := sttySettings(t, userTty); during == before {
+		t.Error("the terminal is not in raw mode while the child runs")
+	}
+	// Enter sends a carriage return, not a newline; the child's own line
+	// discipline is what turns it into the end of a line.
+	keyboard.Write([]byte("hi\r"))
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the keystrokes never reached the child")
+	}
+	if !strings.HasSuffix(got, "got hi\r\n") {
+		t.Errorf("Bytes = %q, want the child to have read what was typed", got)
+	}
+	if after := sttySettings(t, userTty); after != before {
+		t.Errorf("terminal left as %q, want it restored to %q", after, before)
 	}
 }
