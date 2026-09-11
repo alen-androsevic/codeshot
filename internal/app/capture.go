@@ -16,6 +16,16 @@ type Request struct {
 	Chrome   domain.Chrome
 }
 
+// Outcome is what one run produced: where the image landed, and what the
+// command codeshot wrapped exited with. The exit code is the child's, not
+// codeshot's - a source that never ran a child reports 0 - and the CLI turns
+// it into codeshot's own status so that the wrapper is drop-in in front of
+// anything.
+type Outcome struct {
+	Path     string
+	ExitCode int
+}
+
 // Service runs the one pipeline codeshot has: source, emulate, frame, render,
 // store, report.
 type Service struct {
@@ -28,22 +38,26 @@ type Service struct {
 	Report  Reporter
 }
 
-func (s Service) Run(req Request) (string, error) {
+func (s Service) Run(req Request) (Outcome, error) {
 	capture, err := s.Source.Capture()
 	if err != nil {
-		return "", err
+		return Outcome{}, err
 	}
+	// From here on the child has already run and its output has already
+	// passed through, so every failure below carries the exit code out with
+	// it: losing the image must not look like losing the command.
+	out := Outcome{ExitCode: capture.ExitCode}
 	result, err := s.Emu.Emulate(capture)
 	if err != nil {
-		return "", fmt.Errorf("emulating the capture: %w", err)
+		return out, fmt.Errorf("emulating the capture: %w", err)
 	}
 	header, err := s.header(capture, req)
 	if err != nil {
-		return "", err
+		return out, err
 	}
 	theme, err := s.Themes.Theme(themeName(req.Theme))
 	if err != nil {
-		return "", err
+		return out, err
 	}
 
 	chrome := req.Chrome
@@ -60,16 +74,17 @@ func (s Service) Run(req Request) (string, error) {
 		Theme:  theme,
 	})
 	if err != nil {
-		return "", fmt.Errorf("rendering: %w", err)
+		return out, fmt.Errorf("rendering: %w", err)
 	}
 
 	name := domain.ResolveName(req.Name, capture.Command, s.Gallery.Exists)
 	path, err := s.Gallery.Store(name, img)
 	if err != nil {
-		return "", err
+		return out, err
 	}
 	s.Report.Stored(path)
-	return path, nil
+	out.Path = path
+	return out, nil
 }
 
 // header runs the prompt through the emulator too, so a prompt with colour in

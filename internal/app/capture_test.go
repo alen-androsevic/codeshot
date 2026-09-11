@@ -182,15 +182,15 @@ func TestRunPrefersAnExplicitTitle(t *testing.T) {
 
 func TestRunNamesAndStoresTheShot(t *testing.T) {
 	s, _, gal, rep := newService()
-	path, err := s.Run(Request{})
+	out, err := s.Run(Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gal.stored != "ls-la.png" {
 		t.Errorf("stored %q, want ls-la.png", gal.stored)
 	}
-	if path != "/gallery/ls-la.png" || rep.path != path {
-		t.Errorf("path %q, reported %q", path, rep.path)
+	if out.Path != "/gallery/ls-la.png" || rep.path != out.Path {
+		t.Errorf("path %q, reported %q", out.Path, rep.path)
 	}
 }
 
@@ -234,5 +234,26 @@ func TestRunEmulatesTheHeaderAtTheCaptureWidth(t *testing.T) {
 	want := "> ls\n-la\nab\ncd\n"
 	if got := rend.got.Frame.Grid.Text(); got != want {
 		t.Errorf("frame = %q, want %q (header wrapped at the capture's width)", got, want)
+	}
+}
+
+// TestRunCarriesTheChildsExitCode pins the one thing wrapper mode needs from
+// the app layer that render mode never did. domain.Capture has carried an
+// ExitCode since the beginning, but Run threw it away, so the CLI had no
+// route to the child's status short of reaching around the port and asking a
+// concrete pty source. An Outcome is that route, and it is honest for every
+// source: a file and a pipe simply report 0.
+func TestRunCarriesTheChildsExitCode(t *testing.T) {
+	s, _, _, _ := newService()
+	s.Source = stubSource{domain.Capture{Command: "false", Cols: 10, Rows: 4, ExitCode: 3}}
+	out, err := s.Run(Request{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want the child's 3", out.ExitCode)
+	}
+	if out.Path == "" {
+		t.Error("a failing child still produced no path; the image is owed either way")
 	}
 }
