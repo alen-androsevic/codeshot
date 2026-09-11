@@ -26,17 +26,13 @@ function task:golden { ## Rewrite the golden images after a deliberate change
 
 function task:demo { ## Take a shot of ls, to look at
 	task:build
-	# A plain `>` redirect never touches a pty, so `ls` never gets the \r a
-	# terminal would add, and the render stair-steps. script(1) opens a real
-	# pty around the command instead - BSD (macOS) script takes the command
-	# as trailing arguments, GNU (Linux) script only runs one-shot commands
-	# through -c, hence the branch.
+	# macOS ls only colours with -G; GNU ls colours on a terminal with
+	# --color=auto, and under codeshot it is on one.
 	if [[ "$(uname)" == "Darwin" ]]; then
-		script -q /tmp/codeshot-demo.ansi ls -G -la
+		./codeshot demo.png -- ls -G -la
 	else
-		script -qc "ls --color=always -la" /tmp/codeshot-demo.ansi
+		./codeshot demo.png -- ls --color=auto -la
 	fi
-	./codeshot render /tmp/codeshot-demo.ansi demo.png --command "ls -la"
 }
 
 function task:fmt { ## Format everything

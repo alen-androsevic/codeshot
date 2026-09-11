@@ -129,6 +129,12 @@ That package is now `internal/cli` rather than `cmd/codeshot`.)*
 | `Clipboard` | `pbcopy` / `wl-copy` / `xclip` | — |
 | `Tty` | unix ioctl (size, isatty) | ConPTY / Windows |
 
+*Amended during implementation:* `Tty` is not a port. Nothing in
+`internal/app` ever asks for a terminal's size or puts one in raw mode — only
+the CLI and the pty source do, both on the edge — so a port for it would be
+an interface with no caller on the inside. It is `internal/adapters/tty`, a
+plain package the edge uses, and its per-OS work is `golang.org/x/term`'s.
+
 *Amended during implementation:* the `Renderer` and `Gallery` ports are typed
 on `image.Image`, which forecloses the `svg` and `html` adapters this table
 names — neither produces a raster image, and a `Gallery` that stores one
@@ -152,7 +158,9 @@ files plus, optionally, a new chrome preset.
 ### Dependencies
 
 `github.com/creack/pty`, `github.com/mattn/go-runewidth`,
-`golang.org/x/image`, and — since `go-runewidth` v0.0.30 stopped being a leaf
+`golang.org/x/image`, `golang.org/x/term` (terminal size and raw mode, from
+the same `golang.org/x` family whose `x/sys` was already in the tail), and —
+since `go-runewidth` v0.0.30 stopped being a leaf
 — `github.com/clipperhouse/uax29/v2` in the tail behind it. Nothing else; see
 `docs/adr/0003-dependency-tail.md` for why that last one is accepted rather
 than pinned away. Go, `module codeshot`, hand-rolled argument
@@ -185,6 +193,30 @@ comes from argv, so the rendered line is exactly `❯ paradajz danas`.
 
 The wrapper is transparent: passthrough on stdout, the "Stored codeshot in …"
 line on stderr.
+
+*Amended during implementation:*
+
+- **stdin.** When stdin is a terminal it is put into raw mode for the length
+  of the run and forwarded through the pty, so every keystroke reaches the
+  child with the pty's own line discipline doing the cooking; it is restored
+  exactly on the way out. When stdin is *not* a terminal — `< file`, or a
+  pipe — it is handed to the child directly, and only stdout and stderr are
+  on the pty. Forwarding a file through a line discipline built for a person
+  typing echoed the input into the picture, drew a `^D` there when the input
+  ran out, turned a `0x03` byte into SIGINT, and hung on any line past
+  macOS's 1024-byte canonical limit. Tools decide colour from their output,
+  which stays on the terminal.
+- **TERM** is set to `xterm-256color` even over a caller's own, and
+  `COLORTERM` to `truecolor`. The terminal the child is really writing to is
+  codeshot's emulator; a `TERM=xterm-ghostty` would send it to Ghostty's
+  terminfo for sequences the emulator does not know.
+- **Signals.** SIGINT, SIGTERM and SIGHUP sent to codeshot are forwarded to
+  the child's process group. The child leads a session of its own on the
+  pty, so they would not reach it otherwise; forwarding them means codeshot
+  outlives them, restores the terminal, and still takes the picture of an
+  interrupted run.
+- **Size.** `--cols` pins the width across resizes. The capture records the
+  final size, the layout a TUI's last frame was drawn for.
 
 ### Pipe — `paradajz danas | codeshot danas.png`
 
@@ -338,7 +370,17 @@ theme, unreadable font — exits 1 with a message on stderr, *after* the child h
 already run and its output has already passed through. Losing the image must
 never look like losing the command.
 
-Nonexistent command in wrapper mode: exit 127, matching the shell.
+*Amended during implementation:* the two rules above collide when the child
+fails *and* the picture does. The child's code wins: a script gating on
+`codeshot -- make test` must see the tests fail, not a theme typo. Only a
+clean child with a lost picture exits 1. And everything that can fail before
+the child runs — flags, fonts — does fail before it runs, while failing still
+costs nothing.
+
+Nonexistent command in wrapper mode: exit 127, matching the shell, and 126
+for one that exists but may not be run. No image is made: a picture of a
+command that never started would be a picture of nothing. A child killed by
+signal N exits 128+N, as a shell reports it.
 Empty capture (no output at all): still a valid image — prompt and command line
 only.
 
