@@ -41,7 +41,10 @@ type Service struct {
 func (s Service) Run(req Request) (Outcome, error) {
 	capture, err := s.Source.Capture()
 	if err != nil {
-		return Outcome{}, err
+		// A source can fail and still know the exit code - a wrapped command
+		// that was never found is 127, the way a shell reports it - so the
+		// code comes out even though there is nothing to render.
+		return Outcome{ExitCode: capture.ExitCode}, err
 	}
 	// From here on the child has already run and its output has already
 	// passed through, so every failure below carries the exit code out with

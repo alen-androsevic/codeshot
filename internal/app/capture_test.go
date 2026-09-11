@@ -9,9 +9,12 @@ import (
 	"codeshot/internal/domain"
 )
 
-type stubSource struct{ c domain.Capture }
+type stubSource struct {
+	c   domain.Capture
+	err error
+}
 
-func (s stubSource) Capture() (domain.Capture, error) { return s.c, nil }
+func (s stubSource) Capture() (domain.Capture, error) { return s.c, s.err }
 
 type stubEmulator struct {
 	seen []string
@@ -103,7 +106,7 @@ func newService() (Service, *stubRenderer, *stubGallery, *stubReporter) {
 	gal := &stubGallery{taken: map[string]bool{}}
 	rep := &stubReporter{}
 	return Service{
-		Source:  stubSource{domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 10, Rows: 4, Bytes: []byte("a.go\r\nb.go\r\n")}},
+		Source:  stubSource{c: domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 10, Rows: 4, Bytes: []byte("a.go\r\nb.go\r\n")}},
 		Emu:     &stubEmulator{},
 		Prompt:  stubPrompt{},
 		Themes:  stubThemes{},
@@ -162,7 +165,7 @@ func TestRunPrefersTheCommandOverAnOSCTitle(t *testing.T) {
 // best name the window has.
 func TestRunFallsBackToTheOSCTitleWithNoCommand(t *testing.T) {
 	s, rend, _, _ := newService()
-	s.Source = stubSource{domain.Capture{Cols: 10, Rows: 4, Bytes: []byte("a.go\r\n")}}
+	s.Source = stubSource{c: domain.Capture{Cols: 10, Rows: 4, Bytes: []byte("a.go\r\n")}}
 	s.Emu = &stubEmulator{title: "htop"}
 	s.Run(Request{})
 	if rend.got.Chrome.Title != "htop" {
@@ -220,7 +223,7 @@ func TestRunEmulatesTheHeaderAtTheCaptureWidth(t *testing.T) {
 	// the trip.
 	rend := &stubRenderer{}
 	s := Service{
-		Source:  stubSource{domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 5, Rows: 4, Bytes: []byte("ab\r\ncd\r\n")}},
+		Source:  stubSource{c: domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 5, Rows: 4, Bytes: []byte("ab\r\ncd\r\n")}},
 		Emu:     &stubEmulator{},
 		Prompt:  stubPrompt{},
 		Themes:  stubThemes{},
@@ -245,7 +248,7 @@ func TestRunEmulatesTheHeaderAtTheCaptureWidth(t *testing.T) {
 // source: a file and a pipe simply report 0.
 func TestRunCarriesTheChildsExitCode(t *testing.T) {
 	s, _, _, _ := newService()
-	s.Source = stubSource{domain.Capture{Command: "false", Cols: 10, Rows: 4, ExitCode: 3}}
+	s.Source = stubSource{c: domain.Capture{Command: "false", Cols: 10, Rows: 4, ExitCode: 3}}
 	out, err := s.Run(Request{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -255,5 +258,25 @@ func TestRunCarriesTheChildsExitCode(t *testing.T) {
 	}
 	if out.Path == "" {
 		t.Error("a failing child still produced no path; the image is owed either way")
+	}
+}
+
+// TestRunKeepsTheExitCodeOfASourceThatFailed covers a command that never ran.
+// Design §10 wants `codeshot -- nosuchcmd` to exit 127 the way a shell would,
+// and the source is the only thing that knows the child was not found, so a
+// source may fail and still say what the exit code is. Nothing is rendered:
+// a picture of a command that never started would be a picture of nothing.
+func TestRunKeepsTheExitCodeOfASourceThatFailed(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Source = stubSource{c: domain.Capture{ExitCode: 127}, err: errors.New("nosuchcmd: command not found")}
+	out, err := s.Run(Request{})
+	if err == nil {
+		t.Fatal("Run succeeded with a source that failed")
+	}
+	if out.ExitCode != 127 {
+		t.Errorf("ExitCode = %d, want the source's 127", out.ExitCode)
+	}
+	if rend.got.Frame.Grid.Rows() != 0 {
+		t.Error("Run rendered a command that never started")
 	}
 }
