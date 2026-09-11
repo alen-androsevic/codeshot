@@ -448,3 +448,16 @@ func TestWrapperStillAnswersItsOwnHelp(t *testing.T) {
 		t.Errorf("stdout = %q, want the usage block to document the wrapper", stdout.String())
 	}
 }
+
+// TestWrapperNamesAVersionedShotAsAPNG is the command that found the bug:
+// `codeshot v0.2.0 -- git log`, taken to celebrate v0.2.0, wrote a PNG
+// called v0.2.0 because the dots looked like an extension.
+func TestWrapperNamesAVersionedShotAsAPNG(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "v0.2.0", "--", "true")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "v0.2.0.png" {
+		t.Errorf("gallery = %v, want v0.2.0.png", got)
+	}
+}

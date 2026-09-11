@@ -59,3 +59,32 @@ func TestResolveNameDoesNotRenameAnExplicitChoice(t *testing.T) {
 		t.Errorf("got %q, want the explicit name untouched", got)
 	}
 }
+
+// TestResolveNameAddsPNGUnlessItIsThere pins what "a missing extension gets
+// .png" means (design §9). It used to mean "no dot anywhere", so a name with
+// a dot for any other reason was taken to have an extension already:
+// `codeshot v0.2.0 -- git log` wrote PNG bytes to a file called v0.2.0, the
+// first time codeshot was used to picture its own release. The only
+// extension that makes a name finished is .png, because PNG is the only
+// thing codeshot writes - a name ending in anything else gets .png after it,
+// rather than a PNG wearing someone else's extension.
+func TestResolveNameAddsPNGUnlessItIsThere(t *testing.T) {
+	none := func(string) bool { return false }
+	cases := map[string]string{
+		"v0.2.0":             "v0.2.0.png",
+		"my.backup":          "my.backup.png",
+		"shot.jpg":           "shot.jpg.png",
+		"shot.PNG":           "shot.PNG",
+		"shot.png":           "shot.png",
+		"~/Desktop/shot":     "~/Desktop/shot.png",
+		"dir.d/shot":         "dir.d/shot.png",
+		"dir.d/v1.2":         "dir.d/v1.2.png",
+		".hidden":            ".hidden.png",
+		"release-notes.png.": "release-notes.png..png",
+	}
+	for in, want := range cases {
+		if got := ResolveName(in, "ls", none); got != want {
+			t.Errorf("ResolveName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

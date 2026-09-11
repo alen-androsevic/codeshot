@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"unicode"
 )
@@ -50,8 +51,13 @@ func ResolveName(raw, command string, exists func(string) bool) string {
 	return name
 }
 
+// withPNG adds .png unless the name already ends in it. Only .png counts as
+// an extension that finishes a name: PNG is all codeshot writes, so
+// `my.backup` or `shot.jpg` get .png after them rather than PNG bytes under
+// an extension that says otherwise, and a dot anywhere else - a version
+// number, a directory - says nothing about the file's type at all.
 func withPNG(name string) string {
-	if strings.Contains(name, ".") {
+	if strings.EqualFold(path.Ext(name), ".png") {
 		return name
 	}
 	return name + ".png"

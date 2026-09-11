@@ -88,8 +88,6 @@ Carried from the final review's triage. None block use; all are real.
   the `blank()` gap that phase 1 fixed.
 - `domain.Slug` truncates with `s[:slugMax]`, slicing bytes — a non-ASCII
   command can be cut mid-rune into an invalid-UTF-8 filename.
-- `withPNG` treats any `.` as an existing extension, so
-  `codeshot render x.ansi my.backup` writes PNG bytes to `my.backup`.
 - The carriage-return heuristic fires on output that resets the column with
   `ESC[G` rather than `\r`. It renders correctly and still warns; a warning
   that cries wolf gets ignored when it matters.

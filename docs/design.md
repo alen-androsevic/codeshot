@@ -349,7 +349,9 @@ codeshot themes | fonts | doctor | config | version
 
 `[name]` is optional; omitted, it slugs the command (`paradajz-danas.png`, then
 `-2`, `-3` on collision). A bare word lands in the gallery; anything containing
-`/` is treated as a path. A missing extension gets `.png`.
+`/` is treated as a path. A name that does not end in `.png` gets `.png`
+added — including one with a dot for some other reason, like `v0.2.0` or
+`my.backup`, since PNG is the only thing codeshot writes.
 
 Flags, in four groups, each mirrored by a `~/.config/codeshot/config.toml` key:
 
