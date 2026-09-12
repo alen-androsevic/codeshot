@@ -47,22 +47,60 @@ _codeshot_strip_pipe() {
 }
 
 codeshot() {
-	local arg command=""
-	for arg in "$@"; do
-		# Wrapper mode and an explicit --command both already know better.
-		if [[ "$arg" == "--" || "$arg" == "--command" || "$arg" == --command=* ]]; then
-			command codeshot "$@"
-			return
+	local -a before after words
+	local arg expansion="" sawcommand=0
+	local -i split=0 i
+	for (( i = 1; i <= $#; i++ )); do
+		arg="${@[i]}"
+		case "$arg" in
+			--command|--command=*) sawcommand=1 ;;
+		esac
+		if [[ "$arg" == "--" ]]; then
+			split=$i
+			break
 		fi
 	done
-	# Only pipe mode needs this, and pipe mode is the case where standard
-	# input is not a terminal.
+
+	# Wrapper mode. codeshot execs the command itself, and an alias lives in
+	# the shell where no child process can see it - `codeshot -- ll` came
+	# back "command not found". The shell is the only thing that can answer,
+	# and the shim is in the shell, so it answers here.
+	if (( split > 0 )); then
+		before=("${(@)@[1,split-1]}")
+		after=("${(@)@[split+1,-1]}")
+		if (( $#after > 0 )); then
+			expansion="${aliases[${after[1]}]}"
+		fi
+		if [[ -n "$expansion" ]]; then
+			# The caption stays what the user typed: their own scrollback
+			# says `ll`, not what it stands for.
+			(( sawcommand )) || before+=(--command "${after[*]}")
+			if [[ "$expansion" == *[\|\&\;\<\>\(\)\`]* ]]; then
+				# An alias with a pipe or a redirect in it is a little
+				# script, and only a shell can run it.
+				command codeshot "${before[@]}" -- zsh -c "$expansion \"\$@\"" zsh "${(@)after[2,-1]}"
+			else
+				# eval is how the shell itself splits an alias into words,
+				# quotes and all. The text is the user's own alias, which
+				# they were about to run anyway.
+				eval "words=( $expansion )"
+				command codeshot "${before[@]}" -- "${words[@]}" "${(@)after[2,-1]}"
+			fi
+			return
+		fi
+		command codeshot "$@"
+		return
+	fi
+
+	# Pipe mode is the case where standard input is not a terminal, and the
+	# only one that needs history.
 	#
 	# $history[$HISTCMD] is the line being run. `fc -ln -1` is not: it is the
 	# line before it, in a pipeline and out of one, which is how this shim
 	# spent its first release captioning every picture with whatever the user
 	# had typed previously.
-	if [[ ! -t 0 ]]; then
+	local command=""
+	if (( ! sawcommand )) && [[ ! -t 0 ]]; then
 		command="$(_codeshot_strip_pipe "${history[$HISTCMD]}")"
 	fi
 	if [[ -n "$command" ]]; then

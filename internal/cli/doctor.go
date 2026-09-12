@@ -76,6 +76,7 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 		out.line("scanned", "%s", home.Tildify(dir))
 	}
 	out.line("fallbacks", "%s", strings.Join(installedFallbacks(index), ", "))
+	out.line("symbols", "%s", symbolFonts(index))
 
 	out.head("Output")
 	gallery := defaultGallery()
@@ -94,6 +95,20 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 		out.line("size", "%dx%d; stderr is not a terminal here, so this is the fallback", cols, rows)
 	}
 	return 0
+}
+
+// symbolFonts says whether anything on this machine can draw a Nerd Font
+// icon. It is its own line because "the icons are crossed-out boxes" is a
+// question doctor should answer outright: a terminal that draws them may be
+// doing it with a copy compiled into the terminal itself, which is a file
+// codeshot has no way to read.
+func symbolFonts(index fonts.Index) string {
+	names := index.SymbolFamilies()
+	if len(names) == 0 {
+		return "none installed, so Nerd Font icons draw as tofu; " +
+			"`brew install --cask font-symbols-only-nerd-font` is enough"
+	}
+	return strings.Join(names, ", ")
 }
 
 // section keeps doctor's output in two aligned columns.

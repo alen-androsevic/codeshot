@@ -231,3 +231,112 @@ func TestARedirectIsNotAPipeline(t *testing.T) {
 		})
 	}
 }
+
+// TestWrapperModeExpandsAnAlias is the `codeshot -- ll` report: codeshot
+// execs the command itself, and an alias lives in the shell and nowhere a
+// child process can see it, so `ll` came back "command not found". The shell
+// is the only thing that can answer, and the shim is in the shell.
+func TestWrapperModeExpandsAnAlias(t *testing.T) {
+	for _, shell := range shells {
+		t.Run(shell, func(t *testing.T) {
+			calls := recovered(t, shell,
+				"alias ll='printf hello'\ncodeshot -- ll < /dev/null")
+			if len(calls) != 1 {
+				t.Fatalf("codeshot ran %d times, want once: %v", len(calls), calls)
+			}
+			argv := calls[0]
+			joined := strings.Join(argv, " ")
+			if !strings.Contains(joined, "-- printf hello") {
+				t.Errorf("argv = %v, want the alias expanded behind the --", argv)
+			}
+			// The caption is what the user typed, not what it stood for:
+			// their own scrollback says `ll`.
+			if got, ok := commandOf(argv); !ok || got != "ll" {
+				t.Errorf("--command = %q, want \"ll\"", got)
+			}
+		})
+	}
+}
+
+// TestWrapperModeKeepsTheArgumentsAfterAnAlias: `codeshot -- ll -a` is the
+// alias plus a flag of the user's, and the flag belongs to the command.
+func TestWrapperModeKeepsTheArgumentsAfterAnAlias(t *testing.T) {
+	for _, shell := range shells {
+		t.Run(shell, func(t *testing.T) {
+			calls := recovered(t, shell,
+				"alias ll='printf hello'\ncodeshot --theme dracula -- ll world < /dev/null")
+			if len(calls) != 1 {
+				t.Fatalf("codeshot ran %d times, want once: %v", len(calls), calls)
+			}
+			joined := strings.Join(calls[0], " ")
+			if !strings.Contains(joined, "-- printf hello world") {
+				t.Errorf("argv = %v, want the alias expanded and `world` kept after it", calls[0])
+			}
+			if !strings.Contains(joined, "--theme dracula") {
+				t.Errorf("argv = %v, want codeshot's own flags kept", calls[0])
+			}
+			if got, _ := commandOf(calls[0]); got != "ll world" {
+				t.Errorf("--command = %q, want the line the user typed", got)
+			}
+		})
+	}
+}
+
+// TestWrapperModeLeavesARealCommandAlone: only an alias is substituted, and
+// a command that is not one reaches codeshot exactly as it was typed.
+func TestWrapperModeLeavesARealCommandAlone(t *testing.T) {
+	for _, shell := range shells {
+		t.Run(shell, func(t *testing.T) {
+			calls := recovered(t, shell, "codeshot -- echo hi < /dev/null")
+			if len(calls) != 1 {
+				t.Fatalf("codeshot ran %d times, want once: %v", len(calls), calls)
+			}
+			if got := strings.Join(calls[0], " "); got != "-- echo hi" {
+				t.Errorf("argv = %q, want `-- echo hi` untouched", got)
+			}
+		})
+	}
+}
+
+// TestWrapperModeDoesNotExpandAnAliasFurtherIn: only the command word is an
+// alias. `codeshot -- git ll` is git's subcommand, not the shell's alias.
+func TestWrapperModeDoesNotExpandAnAliasFurtherIn(t *testing.T) {
+	for _, shell := range shells {
+		t.Run(shell, func(t *testing.T) {
+			calls := recovered(t, shell,
+				"alias ll='printf hello'\ncodeshot -- echo ll < /dev/null")
+			if len(calls) != 1 {
+				t.Fatalf("codeshot ran %d times, want once: %v", len(calls), calls)
+			}
+			if got := strings.Join(calls[0], " "); got != "-- echo ll" {
+				t.Errorf("argv = %q, want `ll` left alone: it is an argument, not the command", got)
+			}
+		})
+	}
+}
+
+// TestWrapperModeRunsAnAliasThatIsAScript: an alias with a pipe or a
+// redirect in it cannot be split into a command and its arguments, because
+// it is not one command. The shell that owns the alias runs it instead.
+func TestWrapperModeRunsAnAliasThatIsAScript(t *testing.T) {
+	for _, shell := range shells {
+		t.Run(shell, func(t *testing.T) {
+			calls := recovered(t, shell,
+				"alias busy='printf one | tr a-z A-Z'\ncodeshot -- busy < /dev/null")
+			if len(calls) != 1 {
+				t.Fatalf("codeshot ran %d times, want once: %v", len(calls), calls)
+			}
+			argv := calls[0]
+			joined := strings.Join(argv, " ")
+			if !strings.Contains(joined, "-- "+shell+" -c") {
+				t.Errorf("argv = %v, want the alias handed to %s -c", argv, shell)
+			}
+			if !strings.Contains(joined, "printf one | tr a-z A-Z") {
+				t.Errorf("argv = %v, want the alias body passed through whole", argv)
+			}
+			if got, _ := commandOf(argv); got != "busy" {
+				t.Errorf("--command = %q, want the word the user typed", got)
+			}
+		})
+	}
+}

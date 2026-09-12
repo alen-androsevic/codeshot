@@ -66,17 +66,58 @@ _codeshot_history_line() {
 }
 
 codeshot() {
-	local arg command=""
-	for arg in "$@"; do
-		# Wrapper mode and an explicit --command both already know better.
-		if [[ "$arg" == "--" || "$arg" == "--command" || "$arg" == --command=* ]]; then
-			command codeshot "$@"
-			return
+	local -a argv=("$@") before after words
+	local arg expansion="" sawcommand=0
+	local -i split=-1 i
+	for (( i = 0; i < ${#argv[@]}; i++ )); do
+		arg="${argv[i]}"
+		case "$arg" in
+			--command|--command=*) sawcommand=1 ;;
+		esac
+		if [[ "$arg" == "--" ]]; then
+			split=$i
+			break
 		fi
 	done
-	# Only pipe mode needs this, and pipe mode is the case where standard
-	# input is not a terminal.
-	if [[ ! -t 0 ]]; then
+
+	# Wrapper mode. codeshot execs the command itself, and an alias lives in
+	# the shell where no child process can see it - `codeshot -- ll` came
+	# back "command not found". The shell is the only thing that can answer,
+	# and the shim is in the shell, so it answers here.
+	#
+	# BASH_ALIASES needs bash 4; on the bash 3.2 Apple ships the lookup finds
+	# nothing and an alias behaves as it did before, which is to say not.
+	if (( split >= 0 )); then
+		before=("${argv[@]:0:split}")
+		after=("${argv[@]:split+1}")
+		if (( ${#after[@]} > 0 )); then
+			expansion="${BASH_ALIASES[${after[0]}]:-}"
+		fi
+		if [[ -n "$expansion" ]]; then
+			# The caption stays what the user typed: their own scrollback
+			# says `ll`, not what it stands for.
+			(( sawcommand )) || before+=(--command "${after[*]}")
+			if [[ "$expansion" == *[\|\&\;\<\>\(\)\`]* ]]; then
+				# An alias with a pipe or a redirect in it is a little
+				# script, and only a shell can run it.
+				command codeshot "${before[@]}" -- bash -c "$expansion \"\$@\"" bash "${after[@]:1}"
+			else
+				# eval is how the shell itself splits an alias into words,
+				# quotes and all. The text is the user's own alias, which
+				# they were about to run anyway.
+				eval "words=( $expansion )"
+				command codeshot "${before[@]}" -- "${words[@]}" "${after[@]:1}"
+			fi
+			return
+		fi
+		command codeshot "$@"
+		return
+	fi
+
+	# Pipe mode is the case where standard input is not a terminal, and the
+	# only one that needs history.
+	local command=""
+	if (( ! sawcommand )) && [[ ! -t 0 ]]; then
 		command="$(_codeshot_strip_pipe "$(_codeshot_history_line)")"
 	fi
 	if [[ -n "$command" ]]; then

@@ -113,10 +113,15 @@ func (s *Set) FaceFor(r rune, st domain.Style, sizePx float64) (font.Face, error
 // fallbackFonts is the chain behind the chosen family, loaded the first time
 // a rune needs one. Loading them eagerly would read tens of megabytes for
 // every shot; most shots are ASCII and never ask.
+//
+// The platform's fixed list comes first and any installed symbol font after
+// it, so that every rune that resolved before this existed still resolves to
+// the same face: a Nerd Font is consulted only for what nothing else had.
 func (s *Set) fallbackFonts() []*sfnt.Font {
 	if !s.fallbacksLoaded {
 		s.fallbacksLoaded = true
-		for _, name := range fallbackFamilies() {
+		candidates := append(fallbackFamilies(), s.index.SymbolFamilies()...)
+		for _, name := range candidates {
 			fam, ok := s.index.Lookup(name)
 			if !ok {
 				continue

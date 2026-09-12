@@ -78,6 +78,22 @@ codeshot --command "deploy" -- deploy --token="$TOKEN"
 codeshot's flags go before the `--`. Everything after it belongs to the
 command, `--help` included.
 
+## Aliases
+
+`codeshot -- ll` cannot work on its own: codeshot runs the command itself,
+and an alias lives inside the shell where no child process can see it, so it
+comes back `command not found`. Sourcing a shim fixes it, because the shim
+runs in the shell that knows:
+
+```sh
+source /path/to/codeshot/shim/codeshot.zsh   # or .bash
+codeshot -- ll                               # runs eza …, prompt line says `ll`
+```
+
+The prompt line shows what you typed, not what it stood for. One level of
+alias is expanded, and an alias with a pipe or a redirect in it is run by
+your shell rather than split into words.
+
 Run `codeshot --help` for every flag.
 
 ## Piping into codeshot
@@ -196,7 +212,9 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | `render`: lines march right across the image | The dump didn't go through a pty; use `codeshot -- cmd` instead |
 | `no background or foreground colour` | You pointed `--theme` at a Ghostty *config*, not a theme file |
 | Emoji are boxes on Linux or Windows | Only Apple's sbix format is read so far; on macOS they render in colour |
-| Nerd Font icons are boxes | Install a Nerd Font and name it: `--font "JetBrainsMono Nerd Font"` |
+| Nerd Font icons are boxes | Install one — `brew install --cask font-symbols-only-nerd-font` — and codeshot finds it for the icons on its own. Your terminal's own copy is compiled into the terminal, where codeshot cannot reach it |
+| `codeshot -- ll` says command not found | An alias is invisible to any child process. Source a shim and codeshot expands it |
+| A piped `ls`/`eza` lost its colour *and* its icons | A pipe is not a terminal, so the tool turned both off. `--color=always --icons=always`, or use the wrapper |
 | A glyph is a box and you have the font | `codeshot doctor` lists what codeshot found, and which font it would use |
 | The wrong theme, or the wrong size | Something in `~/.config/codeshot/config` or Ghostty's config is supplying it; `codeshot doctor` says which |
 

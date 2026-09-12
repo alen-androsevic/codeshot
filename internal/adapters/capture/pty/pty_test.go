@@ -149,6 +149,11 @@ func TestCaptureOfAMissingCommandIs127(t *testing.T) {
 	if !strings.Contains(err.Error(), "codeshot-no-such-command") {
 		t.Errorf("error = %q, want the command named", err)
 	}
+	// An alias is the commonest reason to land here, and it is invisible to
+	// codeshot by construction: the shim is what can see it.
+	if !strings.Contains(err.Error(), "alias") {
+		t.Errorf("error = %q, want it to mention an alias", err)
+	}
 	if c.ExitCode != 127 {
 		t.Errorf("ExitCode = %d, want 127 as a shell would", c.ExitCode)
 	}

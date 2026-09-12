@@ -234,9 +234,17 @@ func startFailureCode(err error) int {
 // unwrapStart makes the message read like a shell's. exec phrases a missing
 // binary as `exec: "foo": executable file not found in $PATH`, which names
 // the command a second time when the caller has already prefixed it.
+//
+// The hint is there because the commonest way to reach this is not a typo.
+// codeshot execs the command itself, so a shell alias or function - which
+// lives in the shell and is invisible to any child process - is not found,
+// and `codeshot -- ll` fails for someone whose ll works everywhere else.
+// The shim resolves aliases before codeshot is reached, which is the fix
+// codeshot itself cannot apply.
 func unwrapStart(err error) error {
 	if errors.Is(err, exec.ErrNotFound) {
-		return errors.New("command not found")
+		return errors.New("command not found; if it is a shell alias or function, " +
+			"source shim/codeshot.zsh (or .bash) so the shell can expand it first")
 	}
 	return err
 }

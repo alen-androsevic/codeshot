@@ -143,3 +143,89 @@ func TestFallbackFamiliesAreNamed(t *testing.T) {
 		t.Error("no fallback families are named for this platform")
 	}
 }
+
+// symbolIndex is an index holding exactly one family, under the name given,
+// backed by a real font file. One family is the point: nothing in the
+// platform's fixed fallback list is in here, so anything the chain finds it
+// found by the rule under test rather than by being Menlo.
+func symbolIndex(t *testing.T, name string) Index {
+	t.Helper()
+	const path = "/System/Library/Fonts/Apple Symbols.ttf"
+	if _, err := os.Stat(path); err != nil {
+		t.Skip("Apple Symbols is not installed here")
+	}
+	return Index{Families: map[string]Family{
+		key(name): {Name: name, Files: [4]FontFile{variantRegular: {Path: path}}},
+	}}
+}
+
+// chainCovers reports whether anything in the fallback chain can draw r.
+//
+// The premise - that the embedded family has no glyph for r, so that finding
+// one proves the chain was walked - is measured on a Set with no index at
+// all. Covers walks the fallback chain itself, so asking it after the index
+// is attached asks whether the font under test is reachable, which is the
+// assertion rather than its premise, and turns a real failure into a skip.
+func chainCovers(t *testing.T, name string, r rune) bool {
+	t.Helper()
+	bare, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.Covers(r) {
+		t.Skipf("the embedded family already draws %q; this test needs a rune it does not have", r)
+	}
+	s, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = s.WithIndex(symbolIndex(t, name))
+	for _, f := range s.fallbackFonts() {
+		if s.covers(f, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestFallbackChainReachesAnInstalledNerdFont is the icons-are-tofu report.
+// A Nerd Font is not on any platform's fixed fallback list - it cannot be,
+// the names are invented by whoever patched the font - so `ll` came out with
+// crossed-out boxes where the icons were even for someone who had one
+// installed, unless they named it with --font, which would then have to draw
+// the text too.
+func TestFallbackChainReachesAnInstalledNerdFont(t *testing.T) {
+	if !chainCovers(t, "Symbols Nerd Font Mono", '☂') {
+		t.Error("an installed Nerd Font is not consulted for a rune nothing else draws")
+	}
+}
+
+// TestFallbackChainIgnoresAnOrdinaryInstalledFamily is the other half: the
+// chain is a short list of known names plus symbol fonts, not everything on
+// the machine. Opening several hundred families to find one glyph is what
+// this rule exists to avoid.
+func TestFallbackChainIgnoresAnOrdinaryInstalledFamily(t *testing.T) {
+	if chainCovers(t, "Some Ordinary Face", '☂') {
+		t.Error("an unrelated installed family was consulted; the chain has become every font on the machine")
+	}
+}
+
+func TestSymbolFamilies(t *testing.T) {
+	idx := Index{Families: map[string]Family{}}
+	for _, name := range []string{
+		"Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", "Hack Nerd Font Propo",
+		"Menlo", "Helvetica", "Powerline Extra Symbols",
+	} {
+		idx.Families[key(name)] = Family{Name: name}
+	}
+	got := idx.SymbolFamilies()
+	want := []string{"Symbols Nerd Font Mono", "Hack Nerd Font Propo", "JetBrainsMono Nerd Font", "Powerline Extra Symbols"}
+	if len(got) != len(want) {
+		t.Fatalf("SymbolFamilies() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("SymbolFamilies()[%d] = %q, want %q (a symbols-only font is the one to prefer, then alphabetical)", i, got[i], want[i])
+		}
+	}
+}

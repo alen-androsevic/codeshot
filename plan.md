@@ -95,8 +95,11 @@ Carried from the final review's triage. None block use; all are real.
 - Colour emoji work on macOS only. Apple's sbix is the one bitmap format
   codeshot reads; Linux's Noto Color Emoji uses CBDT/CBLC or COLR, and
   Windows's Segoe UI Emoji is COLR, so emoji are tofu there.
-- Nerd Font icons need a Nerd Font installed and named with `--font`; the
-  embedded family carries only a handful of genuine Powerline glyphs.
+- Nerd Font icons need a Nerd Font installed on the machine. codeshot finds
+  one by name shape and consults it for runes nothing else draws, so no
+  `--font` is needed; but a terminal that compiles its own copy in - Ghostty
+  does - draws icons codeshot cannot, because there is no file to read.
+  The embedded family carries only a handful of genuine Powerline glyphs.
 - An emoji made of several runes - a skin tone modifier, a ZWJ sequence -
   renders as its base emoji: the grid is runes, and one rune is what the
   bitmap lookup gets.
@@ -109,6 +112,8 @@ Carried from the final review's triage. None block use; all are real.
 - The shims only work in an interactive shell, because a non-interactive
   one keeps no history. Both halves are tested, the recovery half against a
   real interactive zsh and bash.
+- The shims expand one level of alias for `codeshot -- ll`. A shell function
+  is still invisible: it has no text to pass on the way an alias does.
 - Pipe mode sees standard output alone, because that is all a `|` carries.
   A command that writes to standard error - jest, and most test runners -
   puts the interesting half somewhere codeshot never sees; `2>&1 |` or the
