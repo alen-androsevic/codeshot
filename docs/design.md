@@ -87,7 +87,7 @@ Everything impure — pty, filesystem, fonts, clipboard — lives at the edge.
 Theme, font and prompt are *profile* concerns, resolved by precedence:
 
 1. command-line flags
-2. `~/.config/codeshot/config.toml`
+2. `~/.config/codeshot/config` *(amended: `key = value`, not TOML — see §13)*
 3. `~/.config/ghostty/config`, **if it happens to exist** — `theme`,
    `font-family`, `font-size`, `window-padding-x`, `window-padding-y`
 4. built-in defaults
@@ -309,10 +309,15 @@ scans OS font directories once, indexes family names from each font's `name`
 table, and caches the index to `~/.cache/codeshot/fonts.json` with mtime
 invalidation. Glyph coverage is checked per rune.
 
-**Known limitations.** Apple Color Emoji is a bitmap (`sbix`) format
-`golang.org/x/image` cannot read, so emoji render as tofu until a dedicated
-adapter exists. Nerd Font icons render only when a Nerd Font is installed and
-selected by name.
+**Known limitations.** *(Amended: the dedicated adapter exists.)*
+`internal/adapters/fonts/sbix` reads Apple Color Emoji's bitmap strikes -
+PNGs in an `sbix` table, which `golang.org/x/image` parses and then draws
+nothing for - and the rasteriser composites them, fitted to the cell run and
+scaled with x/image's own scaler so the goldens stay byte-exact. Colour is
+the last resort, after every outline fallback, so text a monospace font can
+draw stays monochrome. sbix is Apple's format: Linux's CBDT/CBLC and COLR
+fonts are not read, so emoji are still tofu there. Nerd Font icons render
+only when a Nerd Font is installed and selected by name.
 
 ### Themes
 
@@ -360,7 +365,7 @@ Defaults: no row crop, and no trailing prompt line after the output.
 codeshot [flags] [name] -- <command> [args…]   wrapper (primary)
 codeshot [flags] [name]                        stdin (pipe)
 codeshot render <file.ansi> [name]             saved dump
-codeshot themes | fonts | doctor | config | version
+codeshot themes | doctor | version
 ```
 
 `[name]` is optional; omitted, it slugs the command (`paradajz-danas.png`, then
@@ -369,7 +374,8 @@ codeshot themes | fonts | doctor | config | version
 added — including one with a dot for some other reason, like `v0.2.0` or
 `my.backup`, since PNG is the only thing codeshot writes.
 
-Flags, in four groups, each mirrored by a `~/.config/codeshot/config.toml` key:
+Flags, in four groups, each mirrored by a `~/.config/codeshot/config` key of
+the same name:
 
 - **output** — `--out`, `--gallery`, `--clip`, `--stdout`, ~~`--force`~~
 - **frame** — `--cols`, `--rows`, `--tail`, `--prompt`, `--no-prompt`,
@@ -377,6 +383,16 @@ Flags, in four groups, each mirrored by a `~/.config/codeshot/config.toml` key:
 - **window** — `--controls macos|linux|none`, `--title`, `--no-title`,
   `--padding`, `--radius`, `--shadow`, `--margin`, `--scale`, `--background`
 - **style** — `--theme`, `--font`, `--font-size`, `--line-height`
+
+*Amended during implementation:* `--config <path>` reads codeshot's own
+defaults from somewhere other than the usual place, and `--prompt` and
+`--radius` reach the template and the corner radius. There is no `fonts`
+subcommand and no `config` subcommand: `doctor` reports both, which is what
+either would have been read for. The config file is the flat `key = value`
+shape Ghostty uses rather than TOML — every key is a flag name, there are no
+sections to put anything in, and TOML would have bought a dependency and a
+second format to learn. Keys are applied through the flag set itself, so one
+definition of what a setting means serves the file and the command line.
 
 `--stdout` writes the PNG to stdout and moves passthrough to stderr.
 

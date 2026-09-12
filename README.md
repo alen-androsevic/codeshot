@@ -16,7 +16,8 @@ printed.
 codeshot [name] [flags] -- <command> [args...]   run a command and picture it
 <command> | codeshot [name] [flags]              picture what comes in
 codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
-codeshot themes                                  list the embedded themes
+codeshot themes                                  list the themes that resolve
+codeshot doctor                                  report what codeshot found here
 codeshot version
 ```
 
@@ -57,11 +58,18 @@ full flag list. What is still to come is in [plan.md](plan.md).
 
 ## Themes and fonts
 
+codeshot reads `~/.config/ghostty/config` when there is one, so a shot looks
+like the terminal it came from without being told to: its `theme`,
+`font-size` and window padding are taken as defaults, under anything you pass
+on the command line. `~/.config/codeshot/config` holds your own defaults in
+the same `key = value` shape, and sits between the two.
+
 Colours come from Ghostty theme files: `--theme codeshot-dark` and
-`--theme codeshot-light` are embedded in the binary, and `--theme
+`--theme codeshot-light` are embedded in the binary, a named theme resolves
+against a local Ghostty installation's several hundred, and `--theme
 /path/to/a/ghostty/theme` reads anyone else's, using the same handful of
 keys (`background`, `foreground`, `cursor-color`, `palette`) Ghostty itself
-understands. No Ghostty installation is required either way.
+understands. No Ghostty installation is required for the embedded two.
 
 A theme file has to define at least `background` and `foreground`. Every
 other key is ignored, so without that requirement any file at all would parse
@@ -72,4 +80,12 @@ with no colours in it.
 
 Text is set in JetBrains Mono NL, embedded in the binary in all four
 weights (regular, bold, italic, bold-italic), so a shot renders identically
-on a machine that has never seen that font installed.
+on a machine that has never seen that font installed. `--font` draws with any
+family installed here instead, and a rune the chosen family has no glyph for
+is picked up by something that does - `中文` from a system face, `🎉` in
+colour from Apple Color Emoji, which is a bitmap format `golang.org/x/image`
+cannot read and codeshot decodes itself. A family with no italic cut is
+sheared 12°, and one with no bold is double-struck.
+
+`codeshot doctor` reports what was found: the config files read, the theme
+directories, the font index and what a shot would be drawn with.

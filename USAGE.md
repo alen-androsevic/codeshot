@@ -5,6 +5,12 @@ Turn a command's output into a PNG that looks like a terminal window.
 ## Install
 
 ```sh
+./install.sh          # builds with the version stamped in, into ~/bin
+```
+
+or by hand, without the version:
+
+```sh
 go build -o codeshot ./cmd/codeshot && mv codeshot ~/bin/
 ```
 
@@ -103,6 +109,53 @@ and they stand aside for `codeshot -- cmd` and for an explicit `--command`.
 
 The wrapper has neither problem. Prefer it when you can.
 
+## Make it look like your terminal
+
+codeshot reads `~/.config/ghostty/config` when you have one and takes the
+four settings it can honour: `theme`, `font-size`, `window-padding-x` and
+`window-padding-y`. A shot from a Catppuccin Mocha terminal comes out in
+Catppuccin Mocha with nothing passed on the command line. A `theme` naming
+both a light and a dark one gets the dark one, so the same command gives the
+same picture whatever time of day it is.
+
+Named themes resolve against a Ghostty installation, so any of the several
+hundred it ships works:
+
+```sh
+codeshot --theme "Catppuccin Latte" -- git status
+codeshot themes | grep -i tokyo          # what resolves here
+```
+
+Fonts come from the machine:
+
+```sh
+codeshot --font Menlo -- git status
+codeshot doctor                          # what is installed, and what a shot would use
+```
+
+A rune your font has no glyph for is drawn by something that does, so `中文`
+and `→` arrive even from a font that never heard of them. On macOS colour
+emoji are decoded out of Apple Color Emoji and composited in, so `🎉` is a
+picture rather than a box; on Linux and Windows emoji are still tofu, because
+those platforms' emoji fonts use formats codeshot does not read yet.
+
+### Your own defaults
+
+`~/.config/codeshot/config` holds the flags you would otherwise always pass.
+Every key is a flag name without its dashes:
+
+```
+theme = Catppuccin Mocha
+font = JetBrains Mono
+font-size = 13
+padding = 20
+no-shadow
+```
+
+Flags beat that file, it beats Ghostty's config, and Ghostty's beats the
+built-in defaults. `--config <path>` reads somewhere else instead, and
+`codeshot doctor` says which files were read and what they changed.
+
 ## Rendering a saved dump
 
 If you already have the raw bytes of a terminal session, render them
@@ -131,6 +184,9 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | `--stdout` printed junk in my terminal | That's the PNG. Redirect it: `codeshot --stdout -- cmd > shot.png` |
 | `render`: lines march right across the image | The dump didn't go through a pty; use `codeshot -- cmd` instead |
 | `no background or foreground colour` | You pointed `--theme` at a Ghostty *config*, not a theme file |
-| Emoji and Nerd Font icons are boxes | Known limitation — the embedded font can't render them |
+| Emoji are boxes on Linux or Windows | Only Apple's sbix format is read so far; on macOS they render in colour |
+| Nerd Font icons are boxes | Install a Nerd Font and name it: `--font "JetBrainsMono Nerd Font"` |
+| A glyph is a box and you have the font | `codeshot doctor` lists what codeshot found, and which font it would use |
+| The wrong theme, or the wrong size | Something in `~/.config/codeshot/config` or Ghostty's config is supplying it; `codeshot doctor` says which |
 
 `--debug` lists every escape sequence the renderer ignored.

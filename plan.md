@@ -1,9 +1,10 @@
 # codeshot — what's left
 
-Phases 1 and 2 are merged: the pure `bytes → PNG` core, a VT emulator, a
-native rasteriser, `codeshot render`, and capture - `codeshot -- ls -la`
-under a pty, `npm test | codeshot` from a pipe, and the flags that decide
-where the picture goes. This file is everything still owed,
+All three phases are merged: the pure `bytes → PNG` core, a VT emulator, a
+native rasteriser, `codeshot render`, capture (`codeshot -- ls -la` under a
+pty, `npm test | codeshot` from a pipe, and the flags that decide where the
+picture goes), and the profile work that makes a shot look like the terminal
+it came from. This file is everything still owed,
 in the order it makes sense to do it. Design rationale lives in
 `docs/design.md`; decisions already settled are in `docs/adr/`.
 
@@ -23,35 +24,21 @@ the default, this is the flag that would make it bearable.
 
 ---
 
-## Phase 3 — make it look like *your* terminal
+## Phase 3 — done
 
-**3.1 Read `~/.config/ghostty/config` when it exists**
-`theme`, `font-family`, `font-size`, `window-padding-x/y`. Opportunistic —
-its absence is never an error. This is what makes a shot match the terminal
-it came from.
+Ghostty's config is read (theme, font-size, window padding), named themes
+resolve against a Ghostty installation's several hundred, the machine's fonts
+are indexed and cached, `--font` draws with any of them, a rune the family
+lacks falls back through the platform's faces, a family with no italic cut is
+sheared 12°, colour emoji are decoded from Apple's sbix bitmaps, and
+`doctor`, `install.sh` and `~/.config/codeshot/config` exist.
 
-**3.2 Resolve named themes from a Ghostty install**
-`theme.Source.Dirs` already exists and is empty. Fill it with the local
-themes directory so `--theme tokyonight` works against the several hundred
-Ghostty ships.
-
-**3.3 System font index + fallback chain**
-Scan the OS font directories, index family names from each font's `name`
-table, cache to `~/.cache/codeshot/fonts.json` with mtime invalidation. Then
-`--font` works, Nerd Font icons render if one is installed, and the dead
-nil-variant fallback in `fonts.Face` becomes live. Add the 12° synthetic
-italic shear here — it is unreachable until a fallback font without an italic
-cut is in play.
-
-**3.4 `doctor`, `install.sh`, `--config`**
-A `doctor` that reports what it found (Ghostty config, fonts, gallery
-permissions), an `install.sh` that stamps the version, and
-`~/.config/codeshot/config.toml` for defaults.
-
-**3.5 Colour emoji**
-Apple Color Emoji is `sbix`, a bitmap format `golang.org/x/image` cannot
-read. Needs a separate adapter that decodes the bitmap strike and composites
-it. Currently documented as a known limitation in `USAGE.md`.
+Two decisions worth remembering. codeshot's config is Ghostty-flavoured
+`key = value` rather than the TOML design §4 named: every key is a flag name,
+there are no sections, and TOML would have cost a dependency and a second
+format. And a `theme` that names a light and a dark one takes the dark one,
+rather than following the system appearance, so that the same command gives
+the same picture at any time of day.
 
 ---
 
@@ -74,14 +61,10 @@ Carried from the final review's triage. None block use; all are real.
   calling `Unknown`, so it goes unlogged under `--debug`.
 
 **Tests**
-- `internal/adapters/report` has no test; `tildify`'s `~` contraction is
-  never exercised because every test uses `t.TempDir()`.
 - No CLI test for `--background`, either the reject or the accept path.
 - CSI `E`, `F` and `d` are dispatched but untested.
 - SGR truncation is tested only for `38;5`; the `38;2`/`48;2` short-triple
   path is structurally identical and uncovered.
-- Theme lookup has no precedence test (embedded beats `Dirs` beats literal
-  path) — phase 3 layers a Ghostty directory onto exactly that ordering.
 - 3-digit shorthand hex (`#abc`) is implemented but unexercised.
 - `TestControlsNoneDrawsNoButtons` cannot reach the branch it names:
   `layout()` zeroes the titlebar for that configuration before `drawChrome`
@@ -92,14 +75,6 @@ Carried from the final review's triage. None block use; all are real.
   asserts nothing.
 
 **Tidying**
-- `tildify` is implemented twice, in `report` and `prompt`. One helper.
-- `domain.Frame.Title` is set by `Compose` and read by nothing; the renderer
-  uses `Chrome.Title`. Delete the field or use it.
-- `codeshot themes` hardcodes the two theme names instead of asking
-  `theme.Source`. A third embedded theme would make the subcommand lie.
-- `gallery.FS.Store` closes the file twice (deferred plus returned).
-- `fitTitle` shrinks one rune at a time with a `MeasureString` per step.
-  Fine for command lines; worth a comment if it ever sees hostile input.
 
 ---
 
@@ -110,14 +85,21 @@ Carried from the final review's triage. None block use; all are real.
   amd64, and it is hostage to any change in `compress/flate` across Go
   toolchains (`docs/adr/0002`). A CI matrix is how that stays honest.
 - **No remote.** The repo is local-only.
-- **Missing phase-1-able flags** the design names: `--radius` (the `Chrome`
-  field is plumbed, just not exposed), `--prompt`, `--font`.
+- **No `.ansi` corpus** and no end-to-end smoke task; `task demo` renders but
+  asserts nothing.
 
 ---
 
 ## Known limitations to keep documenting
 
-- Emoji and unpatched Nerd Font glyphs render as tofu (3.5, 3.3).
+- Colour emoji work on macOS only. Apple's sbix is the one bitmap format
+  codeshot reads; Linux's Noto Color Emoji uses CBDT/CBLC or COLR, and
+  Windows's Segoe UI Emoji is COLR, so emoji are tofu there.
+- Nerd Font icons need a Nerd Font installed and named with `--font`; the
+  embedded family carries only a handful of genuine Powerline glyphs.
+- An emoji made of several runes - a skin tone modifier, a ZWJ sequence -
+  renders as its base emoji: the grid is runes, and one rune is what the
+  bitmap lookup gets.
 - Typeahead during rendering is lost. The goroutine forwarding a terminal
   stdin into the pty cannot be cancelled - a blocking read on a tty has no
   deadline - so keys typed after the child exits but before codeshot does
