@@ -6,6 +6,7 @@ package fonts
 import (
 	"embed"
 	"fmt"
+	"image"
 	"math"
 	"sync"
 
@@ -58,7 +59,13 @@ type Set struct {
 	fallbacks       []*sfnt.Font
 	fallbacksLoaded bool
 	fallbackFaces   map[fallbackKey]font.Face
-	buf             sfnt.Buffer
+	// color are the platform's colour bitmap fonts, opened the first time a
+	// rune nothing else can draw asks for one; colorGlyphs caches what they
+	// decoded, since a picture usually repeats the same few emoji.
+	color       []colorFont
+	colorLoaded bool
+	colorGlyphs map[colorKey]image.Image
+	buf         sfnt.Buffer
 }
 
 const (

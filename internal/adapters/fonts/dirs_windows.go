@@ -19,6 +19,10 @@ func fallbackFamilies() []string {
 	}
 }
 
+// emojiFamilies is empty here on purpose: Segoe UI Emoji is a COLR font, not
+// an sbix one, and codeshot reads only sbix so far.
+func emojiFamilies() []string { return nil }
+
 // systemFontDirs is one of design §5's four per-OS seams. Windows is not a
 // platform codeshot is tested on - there is no ConPTY capture yet - but the
 // font index has no reason to be the thing that stops it building.

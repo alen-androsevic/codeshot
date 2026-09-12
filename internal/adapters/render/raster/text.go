@@ -5,6 +5,7 @@ import (
 	"image/draw"
 	"math"
 
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 
@@ -57,6 +58,18 @@ func (r Renderer) drawGlyphs(img *image.RGBA, l layout, th domain.Theme, line []
 			// drawn at each cell's own offset to cover the whole rune.
 			r.drawDecorations(img, l, th, cell, x, top, baseline)
 			continue
+		}
+		// A rune no outline font on the machine can draw gets one last
+		// chance before tofu: a colour bitmap, which is how emoji exist.
+		// Colour is the last resort rather than the first, so that text a
+		// monospace font can draw stays monochrome and keeps the grid's
+		// rhythm.
+		if !r.fonts.Covers(cell.Rune) {
+			if bitmap, ok := r.fonts.ColorGlyph(cell.Rune, l.metrics.CellH); ok {
+				r.drawBitmap(img, l, bitmap, cell, x, top)
+				r.drawDecorations(img, l, th, cell, x, top, baseline)
+				continue
+			}
 		}
 		// FaceFor, not Face: the rune decides which font draws it, so a
 		// glyph the chosen family lacks is picked up by something that has
@@ -145,4 +158,26 @@ func (r Renderer) drawSheared(img *image.RGBA, l layout, face font.Face, fg doma
 			image.Rect(left-originX+dx, baseline-originY+y, left-originX+dx+b.Dx(), baseline-originY+y+1),
 			scratch, image.Pt(b.Min.X, y), draw.Over)
 	}
+}
+
+// drawBitmap composites a colour glyph into the cells it occupies. The
+// bitmap is square and the cell run is not, so it is fitted to whichever of
+// the two is smaller and centred in the other - an emoji that overflowed its
+// column would sit on top of the text beside it.
+//
+// The scaling is x/image's, which is pure Go and gives the same pixels on
+// every machine, so the golden images stay byte-exact (docs/adr/0002).
+func (r Renderer) drawBitmap(img *image.RGBA, l layout, src image.Image, cell domain.Cell, x, top int) {
+	cells := int(cell.Width)
+	if cells < 1 {
+		cells = 1
+	}
+	box := cells * l.metrics.CellW
+	size := box
+	if l.metrics.CellH < size {
+		size = l.metrics.CellH
+	}
+	left := l.grid.X + x*l.metrics.CellW + (box-size)/2
+	topY := top + (l.metrics.CellH-size)/2
+	xdraw.CatmullRom.Scale(img, image.Rect(left, topY, left+size, topY+size), src, src.Bounds(), draw.Over, nil)
 }

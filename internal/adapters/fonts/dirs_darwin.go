@@ -25,6 +25,13 @@ func fallbackFamilies() []string {
 	}
 }
 
+// emojiFamilies are the colour bitmap fonts to consult for a rune no outline
+// font can draw. Apple's is an sbix font - PNG bitmaps in the font file -
+// which is the format internal/adapters/fonts/sbix reads.
+func emojiFamilies() []string {
+	return []string{"Apple Color Emoji"}
+}
+
 // systemFontDirs is one of design §5's four per-OS seams. macOS keeps its
 // own faces in /System/Library/Fonts, the several hundred it installs
 // alongside them in Supplemental, and anything a person or an installer

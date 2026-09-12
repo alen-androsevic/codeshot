@@ -26,6 +26,12 @@ func fallbackFamilies() []string {
 	}
 }
 
+// emojiFamilies is empty here on purpose. Linux colour emoji fonts - Noto
+// Color Emoji and the rest - keep their bitmaps in CBDT/CBLC or draw them
+// with COLR layers, and codeshot reads neither yet; sbix is Apple's format.
+// An emoji still renders as tofu on this platform, as it always has.
+func emojiFamilies() []string { return nil }
+
 // systemFontDirs is one of design §5's four per-OS seams. These are
 // fontconfig's usual places, in the order it searches them: the system's
 // own, the local administrator's, and the user's.
