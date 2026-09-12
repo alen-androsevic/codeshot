@@ -34,13 +34,6 @@ func TestComposeCropsToRows(t *testing.T) {
 	}
 }
 
-func TestComposeCarriesTheTitle(t *testing.T) {
-	f := Compose(Grid{}, Result{Main: gridOf(2, "x"), Title: "ls"}, FrameOptions{})
-	if f.Title != "ls" {
-		t.Errorf("Title = %q, want ls", f.Title)
-	}
-}
-
 func TestComposePreservesBlanksInHeaderWhenMainFollows(t *testing.T) {
 	// This test pins the join-then-trim ordering. In the phase-1 pipeline,
 	// the header always arrives pre-trimmed before Compose sees it, so this

@@ -6,8 +6,8 @@ package report
 import (
 	"fmt"
 	"io"
-	"os"
-	"strings"
+
+	"codeshot/internal/home"
 )
 
 type Writer struct {
@@ -21,20 +21,9 @@ func (w Writer) Stored(path string) {
 	if path == "" {
 		return
 	}
-	fmt.Fprintf(w.Err, "Stored codeshot in %s\n", tildify(path))
+	fmt.Fprintf(w.Err, "Stored codeshot in %s\n", home.Tildify(path))
 }
 
 func (w Writer) Warn(msg string) {
 	fmt.Fprintf(w.Err, "codeshot: %s\n", msg)
-}
-
-func tildify(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	if strings.HasPrefix(path, home+"/") {
-		return "~" + strings.TrimPrefix(path, home)
-	}
-	return path
 }

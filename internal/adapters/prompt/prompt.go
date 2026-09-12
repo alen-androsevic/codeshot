@@ -5,10 +5,10 @@
 package prompt
 
 import (
-	"os"
 	"strings"
 
 	"codeshot/internal/domain"
+	"codeshot/internal/home"
 )
 
 // Default is a cwd line and a chevron, in the shape most prompts take. The
@@ -28,20 +28,6 @@ func (t Template) Header(c domain.Capture) []byte {
 	if text == "" {
 		text = Default
 	}
-	text = strings.ReplaceAll(text, "{cwd}", tildify(c.Cwd))
+	text = strings.ReplaceAll(text, "{cwd}", home.Tildify(c.Cwd))
 	return []byte(text + c.Command + "\r\n")
-}
-
-func tildify(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || path == "" {
-		return path
-	}
-	if path == home {
-		return "~"
-	}
-	if strings.HasPrefix(path, home+"/") {
-		return "~" + strings.TrimPrefix(path, home)
-	}
-	return path
 }

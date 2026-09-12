@@ -27,10 +27,12 @@ type FrameOptions struct {
 	Tail bool
 }
 
-// Frame is the grid that will be drawn, and the title over it.
+// Frame is the grid that will be drawn. The title is not here: the window is
+// titled from Chrome.Title, which the app layer fills in from the command or
+// an OSC title, and a second copy on the Frame was written by Compose and
+// read by nobody.
 type Frame struct {
-	Grid  Grid
-	Title string
+	Grid Grid
 }
 
 // Compose applies the framing rule. A program that took the alternate screen
@@ -48,5 +50,5 @@ func Compose(header Grid, r Result, opts FrameOptions) Frame {
 	} else {
 		g = g.Head(opts.Rows)
 	}
-	return Frame{Grid: g, Title: r.Title}
+	return Frame{Grid: g}
 }

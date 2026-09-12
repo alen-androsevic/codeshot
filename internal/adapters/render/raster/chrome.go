@@ -3,8 +3,10 @@ package raster
 import (
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
@@ -54,16 +56,21 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 	if !w.Chrome.ShowTitle || w.Chrome.Title == "" {
 		return nil
 	}
-	face, err := r.fonts.Face(domain.Style{}, 11*float64(l.scale))
+	sizePx := 11 * float64(l.scale)
+	face, err := r.fonts.Face(domain.Style{}, sizePx)
 	if err != nil {
 		return err
 	}
-	title, ok := fitTitle(face, w.Chrome.Title, l.window.Dx()-2*titleInset(w.Chrome.Controls, l.scale))
+	// The title is drawn rune by rune, like the grid below it, because the
+	// title defaults to the command: `codeshot -- printf '🎉 中文'` put both
+	// of those in the titlebar, where a single face drew them as tofu while
+	// the output underneath had them right.
+	measure := func(s string) int { return r.measureTitle(s, sizePx, face) }
+	title, ok := fitTitle(measure, w.Chrome.Title, l.window.Dx()-2*titleInset(w.Chrome.Controls, l.scale))
 	if !ok {
 		return nil
 	}
-	width := font.MeasureString(face, title)
-	x := l.window.Min.X + (l.window.Dx()-width.Round())/2
+	x := l.window.Min.X + (l.window.Dx()-measure(title))/2
 	// A title at full foreground strength shouts over the output it labels.
 	fg, bg := w.Theme.Foreground, w.Theme.Background
 	dim := color.RGBA{
@@ -72,14 +79,73 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 		uint8((int(fg.B) + int(bg.B)) / 2),
 		0xFF,
 	}
+	baseline := l.window.Min.Y + l.titlebar/2 + 4*l.scale
+	for _, ru := range title {
+		x += r.drawTitleRune(img, ru, sizePx, face, dim, x, baseline)
+	}
+	return nil
+}
+
+// titleEm is the square a colour glyph fills in the titlebar: one em, so an
+// emoji is the size of the letters beside it.
+func titleEm(sizePx float64) int { return int(math.Round(sizePx)) }
+
+// titleFace is the face for one rune of the title, which may not be the
+// title's own: the same per-rune fallback the grid uses.
+func (r Renderer) titleFace(ru rune, sizePx float64, fallback font.Face) font.Face {
+	if f, err := r.fonts.FaceFor(ru, domain.Style{}, sizePx); err == nil {
+		return f
+	}
+	return fallback
+}
+
+func (r Renderer) measureTitle(s string, sizePx float64, fallback font.Face) int {
+	total := 0
+	for _, ru := range s {
+		total += r.titleAdvance(ru, sizePx, fallback)
+	}
+	return total
+}
+
+func (r Renderer) titleAdvance(ru rune, sizePx float64, fallback font.Face) int {
+	if !r.fonts.Covers(ru) {
+		if _, ok := r.fonts.ColorGlyph(ru, titleEm(sizePx)); ok {
+			return titleEm(sizePx)
+		}
+	}
+	adv, ok := r.titleFace(ru, sizePx, fallback).GlyphAdvance(ru)
+	if !ok {
+		return 0
+	}
+	return adv.Round()
+}
+
+// drawTitleRune draws one rune and reports how far along to move.
+func (r Renderer) drawTitleRune(img *image.RGBA, ru rune, sizePx float64, fallback font.Face, dim color.RGBA, x, baseline int) int {
+	if !r.fonts.Covers(ru) {
+		if bitmap, ok := r.fonts.ColorGlyph(ru, titleEm(sizePx)); ok {
+			em := titleEm(sizePx)
+			// A sixth of the em below the baseline, roughly where a
+			// descender would reach, so it sits on the line rather than
+			// floating above it.
+			top := baseline - em + em/6
+			xdraw.CatmullRom.Scale(img, image.Rect(x, top, x+em, top+em), bitmap, bitmap.Bounds(), draw.Over, nil)
+			return em
+		}
+	}
+	face := r.titleFace(ru, sizePx, fallback)
 	d := font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(dim),
 		Face: face,
-		Dot:  fixed.P(x, l.window.Min.Y+l.titlebar/2+4*l.scale),
+		Dot:  fixed.P(x, baseline),
 	}
-	d.DrawString(title)
-	return nil
+	d.DrawString(string(ru))
+	adv, ok := face.GlyphAdvance(ru)
+	if !ok {
+		return 0
+	}
+	return adv.Round()
 }
 
 // fillRoundRect fills r with c, rounding every corner. Anti-aliasing comes
@@ -165,20 +231,30 @@ func titleInset(c domain.Controls, scale int) int {
 // It reports false when not even the ellipsis fits, and then no title is
 // drawn at all - a lone "…" sitting on top of the traffic lights tells the
 // reader less than an empty titlebar does.
-func fitTitle(face font.Face, title string, avail int) (string, bool) {
+//
+// measure is passed in rather than a face because a title's width is no
+// longer one face's business: a rune may be drawn by a fallback font or by a
+// colour bitmap, and a title measured with the wrong widths is a title drawn
+// off centre.
+//
+// The search drops one rune at a time and measures again, which is quadratic
+// in the length of the title. Titles are command lines, so the constant is
+// tiny; a title arriving from somewhere less friendly would want a binary
+// search instead.
+func fitTitle(measure func(string) int, title string, avail int) (string, bool) {
 	if avail <= 0 {
 		return "", false
 	}
-	if font.MeasureString(face, title).Round() <= avail {
+	if measure(title) <= avail {
 		return title, true
 	}
 	const ellipsis = "\u2026"
-	if font.MeasureString(face, ellipsis).Round() > avail {
+	if measure(ellipsis) > avail {
 		return "", false
 	}
 	runes := []rune(title)
 	for n := len(runes) - 1; n > 0; n-- {
-		if s := string(runes[:n]) + ellipsis; font.MeasureString(face, s).Round() <= avail {
+		if s := string(runes[:n]) + ellipsis; measure(s) <= avail {
 			return s, true
 		}
 	}

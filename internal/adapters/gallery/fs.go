@@ -37,9 +37,16 @@ func (g FS) Store(name string, img image.Image) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 	if err := png.Encode(f, img); err != nil {
+		f.Close()
 		return "", fmt.Errorf("encoding %s: %w", path, err)
 	}
-	return path, f.Close()
+	// Close is where a buffered write finally reaches the disk, so its error
+	// is the one that says the file is not what it should be. It is called
+	// exactly once: this used to be deferred as well as returned, which
+	// closed the file twice and reported whatever the second close said.
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("closing %s: %w", path, err)
+	}
+	return path, nil
 }

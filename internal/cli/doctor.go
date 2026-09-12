@@ -11,6 +11,7 @@ import (
 	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/theme"
 	"codeshot/internal/adapters/tty"
+	"codeshot/internal/home"
 )
 
 // doctor reports what codeshot found on this machine. Everything it prints is
@@ -43,10 +44,10 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 	case own.Path == "":
 		out.line("codeshot", "none; put one at %s", firstPath(config.Paths()))
 	default:
-		out.line("codeshot", "%s (%s)", tildify(own.Path), strings.Join(own.Order, ", "))
+		out.line("codeshot", "%s (%s)", home.Tildify(own.Path), strings.Join(own.Order, ", "))
 	}
 	if gh, found := loadGhostty(); found {
-		out.line("ghostty", "%s", tildify(gh.Path))
+		out.line("ghostty", "%s", home.Tildify(gh.Path))
 		out.line("", "theme %s, font-family %s, font-size %s, padding %d/%d",
 			orNone(gh.Theme), orNone(gh.FontFamily), orZero(gh.FontSize), gh.PaddingX, gh.PaddingY)
 	} else {
@@ -70,15 +71,15 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 	index := loadFontIndex()
 	out.head("Fonts")
 	out.line("drawing with", "%s", drawingWith(own, index))
-	out.line("index", "%s (%d families)", tildify(fonts.CachePath()), len(index.Families))
+	out.line("index", "%s (%d families)", home.Tildify(fonts.CachePath()), len(index.Families))
 	for _, dir := range fonts.SystemFontDirs() {
-		out.line("scanned", "%s", tildify(dir))
+		out.line("scanned", "%s", home.Tildify(dir))
 	}
 	out.line("fallbacks", "%s", strings.Join(installedFallbacks(index), ", "))
 
 	out.head("Output")
 	gallery := defaultGallery()
-	out.line("gallery", "%s (%s)", tildify(gallery), writability(gallery))
+	out.line("gallery", "%s (%s)", home.Tildify(gallery), writability(gallery))
 	if err := clipboardAvailable(); err != nil {
 		out.line("clipboard", "%v", err)
 	} else {
@@ -168,19 +169,4 @@ func orZero(f float64) string {
 		return "(unset)"
 	}
 	return fmt.Sprintf("%g", f)
-}
-
-// tildify contracts the home directory, the way the stored line does.
-func tildify(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || path == "" {
-		return path
-	}
-	if path == home {
-		return "~"
-	}
-	if strings.HasPrefix(path, home+string(filepath.Separator)) {
-		return "~" + strings.TrimPrefix(path, home)
-	}
-	return path
 }
