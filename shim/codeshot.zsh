@@ -14,11 +14,32 @@
 # It does nothing in wrapper mode (`codeshot -- npm test`), where the command
 # is argv and already known, and nothing when --command was passed by hand.
 
-# _codeshot_strip_pipe drops the last pipeline segment from a command line.
-# It is split out from the shim so it can be tested on its own; recovering
-# the history line cannot be, since a non-interactive shell keeps no history.
+# _codeshot_first_word is the first word of a pipeline segment, with the
+# leading whitespace the split leaves behind taken off first.
+_codeshot_first_word() {
+	local seg="$1"
+	seg="${seg#"${seg%%[![:space:]]*}"}"
+	printf '%s' "${seg%%[[:space:]]*}"
+}
+
+# _codeshot_strip_pipe drops codeshot's own segment, and everything after it,
+# from a command line: what is left is the command that produced the bytes.
+# It is split out from the shim so it can be tested on its own.
+#
+# A line with no pipe in it produced nothing for codeshot to read - it is
+# `codeshot --clip < dump.ansi`, or a redirect - and there is no command to
+# recover, so it comes back empty and the prompt line is left out rather than
+# claiming codeshot's own invocation was the command.
 _codeshot_strip_pipe() {
 	local line="$1"
+	[[ "$line" == *"|"* ]] || return 0
+	# Walk in from the right until codeshot's own segment is the last one.
+	# Usually it already is; `npm test | codeshot | pngquant` is why this is
+	# a loop rather than a single chop.
+	while [[ "$line" == *"|"* ]] && [[ "$(_codeshot_first_word "${line##*|}")" != codeshot ]]; do
+		line="${line%|*}"
+	done
+	[[ "$line" == *"|"* ]] || return 0
 	line="${line%|*}"
 	# Trim the trailing whitespace the split leaves behind.
 	line="${line%"${line##*[![:space:]]}"}"
@@ -36,8 +57,13 @@ codeshot() {
 	done
 	# Only pipe mode needs this, and pipe mode is the case where standard
 	# input is not a terminal.
+	#
+	# $history[$HISTCMD] is the line being run. `fc -ln -1` is not: it is the
+	# line before it, in a pipeline and out of one, which is how this shim
+	# spent its first release captioning every picture with whatever the user
+	# had typed previously.
 	if [[ ! -t 0 ]]; then
-		command="$(_codeshot_strip_pipe "$(fc -ln -1 2>/dev/null)")"
+		command="$(_codeshot_strip_pipe "${history[$HISTCMD]}")"
 	fi
 	if [[ -n "$command" ]]; then
 		command codeshot --command "$command" "$@"

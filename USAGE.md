@@ -90,11 +90,21 @@ npm test | codeshot shot.png --command "npm test"
 
 The output still passes through, so you see the run as it happens.
 
-Two things are worse this way, and neither is fixable from codeshot's side.
+Three things are worse this way, and none of them is fixable from
+codeshot's side.
+
+A pipe carries **standard output only**. Anything the command writes to
+standard error goes straight past codeshot to your terminal and never
+reaches the picture, which is how `npm test | codeshot` comes out holding
+npm's two banner lines and none of jest's results: jest writes to standard
+error. Redirect it in, `npm test 2>&1 | codeshot`, or use the wrapper.
+
 A pipe is not a terminal, so most tools turn their colour **off** before
 codeshot sees a single byte — pass `--color=always` (or the tool's
-equivalent) if it has one. And codeshot cannot know what the command was, so
-the prompt line is empty unless you pass `--command`.
+equivalent) if it has one.
+
+And codeshot cannot know what the command was, so the prompt line is empty
+unless you pass `--command`.
 
 The shims fix the second one by reading the command from your shell's
 history:
@@ -179,6 +189,7 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | `ls` has no colour on macOS | That's `ls`, not codeshot: use `ls -G`, or `export CLICOLOR=1` |
 | Piped output is grey | A pipe is not a terminal, so the tool dropped its colour. Use the wrapper, or `--color=always` |
 | Piped output has no prompt line | codeshot can't know the command: pass `--command`, or source a shim |
+| Most of a piped run is missing from the picture | A pipe carries standard output only, and jest and most test runners write to standard error: `cmd 2>&1 \| codeshot`, or use the wrapper |
 | Wrapping differs from your terminal | codeshot sizes from stderr; if that's redirected it falls back to 100 columns. Pass `--cols` |
 | `--clip` says no clipboard tool | Linux needs `wl-clipboard` (Wayland) or `xclip` (X11); macOS needs nothing |
 | `--stdout` printed junk in my terminal | That's the PNG. Redirect it: `codeshot --stdout -- cmd > shot.png` |

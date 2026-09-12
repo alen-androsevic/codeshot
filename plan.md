@@ -106,8 +106,13 @@ Carried from the final review's triage. None block use; all are real.
   are read and dropped. `script` has the same property.
 - A background grandchild holding the pty open keeps codeshot waiting, since
   end-of-output is the last holder of the pty closing it. Same as `script`.
-- The shims only work in an interactive shell, because `fc` needs history.
-  The stripping half is tested; the history lookup is not testable.
+- The shims only work in an interactive shell, because a non-interactive
+  one keeps no history. Both halves are tested, the recovery half against a
+  real interactive zsh and bash.
+- Pipe mode sees standard output alone, because that is all a `|` carries.
+  A command that writes to standard error - jest, and most test runners -
+  puts the interesting half somewhere codeshot never sees; `2>&1 |` or the
+  wrapper is the answer, and no change here can be.
 - Pipe mode cannot recover colour a tool dropped on seeing a pipe, and
   cannot learn the command without a shim or `--command`.
 - codeshot cannot reach a command that has already finished. That is a
