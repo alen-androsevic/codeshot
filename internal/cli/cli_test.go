@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -460,4 +461,208 @@ func TestWrapperNamesAVersionedShotAsAPNG(t *testing.T) {
 	if got := shots(t, dir); len(got) != 1 || got[0] != "v0.2.0.png" {
 		t.Errorf("gallery = %v, want v0.2.0.png", got)
 	}
+}
+
+// pipeFrom is a stdin that is not a terminal, which is what puts codeshot in
+// pipe mode: the file stands in for `producer | codeshot`.
+func pipeFrom(t *testing.T, content string) *os.File {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stdin")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+func runPiped(t *testing.T, in string, args ...string) (code int, dir, stdout, stderr string) {
+	t.Helper()
+	dir = t.TempDir()
+	var out, errb bytes.Buffer
+	code = Run(append([]string{"--gallery", dir}, args...), pipeFrom(t, in), &out, &errb)
+	return code, dir, out.String(), errb.String()
+}
+
+// TestPipeReadsStdin is 2.2: `npm test | codeshot shot.png`. The output is
+// still shown, the way `tee` would, so a pipeline does not go dark.
+func TestPipeReadsStdin(t *testing.T) {
+	code, dir, stdout, stderr := runPiped(t, "a\r\nb\r\n", "shot.png", "--command", "npm test")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "shot.png" {
+		t.Errorf("gallery = %v", got)
+	}
+	if stdout != "a\r\nb\r\n" {
+		t.Errorf("stdout = %q, want the input passed through", stdout)
+	}
+}
+
+func TestPipeNamesItselfAfterTheCommandWhenItKnowsIt(t *testing.T) {
+	_, dir, _, _ := runPiped(t, "x\r\n", "--command", "npm test")
+	if got := shots(t, dir); len(got) != 1 || got[0] != "npm-test.png" {
+		t.Errorf("gallery = %v, want npm-test.png", got)
+	}
+}
+
+// TestPipeWithoutACommandStillWorks: without a shim or --command there is no
+// command to show or to name the file after, and that is not an error.
+func TestPipeWithoutACommandStillWorks(t *testing.T) {
+	code, dir, _, stderr := runPiped(t, "x\r\n")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "codeshot.png" {
+		t.Errorf("gallery = %v, want the fallback name", got)
+	}
+}
+
+func TestPipeOfNothingIsStillAPicture(t *testing.T) {
+	code, dir, _, stderr := runPiped(t, "")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 {
+		t.Errorf("gallery = %v, want a picture of an empty capture", got)
+	}
+}
+
+func TestOutNamesTheFile(t *testing.T) {
+	code, dir, _, stderr := runWrapped(t, "--out", "shot.png", "--", "true")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "shot.png" {
+		t.Errorf("gallery = %v, want --out honoured like a positional name", got)
+	}
+}
+
+func TestOutAlsoWorksForRender(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "--gallery", dir, "--out", "shot.png"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if got := shots(t, dir); len(got) != 1 || got[0] != "shot.png" {
+		t.Errorf("gallery = %v", got)
+	}
+}
+
+// TestOutAndANameTogetherIsAUsageError: two ways to say one thing, said at
+// once, is a mistake worth stopping for rather than a precedence rule to
+// remember.
+func TestOutAndANameTogetherIsAUsageError(t *testing.T) {
+	code, _, _, stderr := runWrapped(t, "name.png", "--out", "other.png", "--", "true")
+	if code != 2 {
+		t.Errorf("exit %d, want a usage error", code)
+	}
+	if !strings.Contains(stderr, "--out") {
+		t.Errorf("stderr = %q, want it to name the conflict", stderr)
+	}
+}
+
+func TestStdoutWritesThePNGToStdout(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--gallery", dir, "--stdout", "--", "echo", "hi"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if _, err := png.Decode(bytes.NewReader(stdout.Bytes())); err != nil {
+		t.Errorf("stdout is not a PNG: %v", err)
+	}
+	if got := shots(t, dir); len(got) != 0 {
+		t.Errorf("gallery = %v, want nothing written to disk", got)
+	}
+	// The command's own output has to go somewhere, and it cannot be stdout.
+	if !strings.Contains(stderr.String(), "hi") {
+		t.Errorf("stderr = %q, want the passthrough moved here", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Stored codeshot") {
+		t.Errorf("stderr = %q, want no stored line when there is no file", stderr.String())
+	}
+}
+
+func TestStdoutInPipeMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--gallery", t.TempDir(), "--stdout"}, pipeFrom(t, "hello\r\n"), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if _, err := png.Decode(bytes.NewReader(stdout.Bytes())); err != nil {
+		t.Errorf("stdout is not a PNG: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "hello") {
+		t.Errorf("stderr = %q, want the passthrough moved here", stderr.String())
+	}
+}
+
+func TestClipCopiesInsteadOfSaving(t *testing.T) {
+	var copied []byte
+	restore := stubClipboard(func(b []byte) error { copied = b; return nil })
+	defer restore()
+
+	code, dir, _, stderr := runWrapped(t, "--clip", "--", "echo", "hi")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if _, err := png.Decode(bytes.NewReader(copied)); err != nil {
+		t.Errorf("what went to the clipboard is not a PNG: %v", err)
+	}
+	if got := shots(t, dir); len(got) != 0 {
+		t.Errorf("gallery = %v, want --clip to write no file", got)
+	}
+	if !strings.Contains(stderr, "the clipboard") {
+		t.Errorf("stderr = %q, want it to say where the picture went", stderr)
+	}
+}
+
+func TestClipReportsAFailure(t *testing.T) {
+	restore := stubClipboard(func([]byte) error { return errors.New("no clipboard tool found") })
+	defer restore()
+
+	code, _, _, stderr := runWrapped(t, "--clip", "--", "true")
+	if code != 1 {
+		t.Errorf("exit %d, want 1 when the picture could not be delivered", code)
+	}
+	if !strings.Contains(stderr, "no clipboard tool") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+// TestOutputDestinationsAreExclusive: --clip and --stdout each replace the
+// file, so asking for both, or naming a file alongside either, asks for two
+// different things at once.
+func TestOutputDestinationsAreExclusive(t *testing.T) {
+	restore := stubClipboard(func([]byte) error { return nil })
+	defer restore()
+
+	for _, args := range [][]string{
+		{"--clip", "--stdout", "--", "true"},
+		{"shot.png", "--clip", "--", "true"},
+		{"--out", "shot.png", "--stdout", "--", "true"},
+	} {
+		code, _, _, stderr := runWrapped(t, args...)
+		if code != 2 {
+			t.Errorf("%v: exit %d, want a usage error", args, code)
+		}
+		if stderr == "" {
+			t.Errorf("%v: nothing explained on stderr", args)
+		}
+	}
+}
+
+// stubClipboard stands in for the clipboard adapter for the length of a
+// test. Copying for real would replace whatever the person running the suite
+// had on their clipboard, which no test is entitled to do.
+func stubClipboard(copy func([]byte) error) func() {
+	oldCopy, oldAvailable := clipboardCopy, clipboardAvailable
+	clipboardCopy = copy
+	clipboardAvailable = func() error { return nil }
+	return func() { clipboardCopy, clipboardAvailable = oldCopy, oldAvailable }
 }

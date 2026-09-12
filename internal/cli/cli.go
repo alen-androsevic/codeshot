@@ -12,13 +12,16 @@ import (
 	"path/filepath"
 
 	"codeshot/internal/adapters/capture/file"
+	"codeshot/internal/adapters/capture/pipe"
 	"codeshot/internal/adapters/capture/pty"
+	"codeshot/internal/adapters/clipboard"
 	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/gallery"
 	"codeshot/internal/adapters/prompt"
 	"codeshot/internal/adapters/render/raster"
 	"codeshot/internal/adapters/report"
 	"codeshot/internal/adapters/theme"
+	"codeshot/internal/adapters/tty"
 	"codeshot/internal/adapters/vt"
 	"codeshot/internal/app"
 	"codeshot/internal/domain"
@@ -27,10 +30,19 @@ import (
 // Version is stamped at build time by install.sh; it is only ever printed.
 var Version = "dev"
 
+// The clipboard adapter, reachable as variables so a test can stand in for
+// it. A test that used the real one would walk off with whatever the person
+// running it had copied.
+var (
+	clipboardCopy      = clipboard.Copy
+	clipboardAvailable = clipboard.Available
+)
+
 const usage = `codeshot - a picture of a command and what it printed
 
 Usage:
   codeshot [name] [flags] -- <command> [args...]   run a command and picture it
+  <command> | codeshot [name] [flags]              picture what comes in
   codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
   codeshot themes                                  list the embedded themes
   codeshot version
@@ -39,7 +51,15 @@ With no name, the shot is named after the command (ls -la -> ls-la.png) and
 stored in the gallery. A name with a / in it is a path. Everything after --
 belongs to the command. codeshot exits with the command's own status.
 
+A pipe is not a terminal, so a command on the left of one has already
+dropped its colour before codeshot sees a byte, and codeshot cannot know what
+that command was. The wrapper has neither problem and is the better half;
+shim/codeshot.zsh and shim/codeshot.bash recover the command line for a pipe.
+
 Flags:
+  --out <name>         where the picture goes; the same as [name]
+  --stdout             write the PNG to standard output, output to stderr
+  --clip               copy the picture to the clipboard, writing no file
   --command <text>     the command line shown after the prompt (default: the
                        command that ran; render has none unless given)
   --cwd <path>         the directory to show in the prompt
@@ -83,24 +103,34 @@ func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	case "render":
 		return render(args[1:], stdout, stderr)
 	}
-	// Anything that is not a subcommand is wrapper mode: a name, flags, or
-	// the -- itself. The subcommands are matched first so that `codeshot
-	// render x.ansi -- name.png` keeps the meaning it has always had.
-	return wrap(args, stdin, stdout, stderr)
+	// Anything that is not a subcommand captures: a command after --, or a
+	// pipeline's output on standard input. The subcommands are matched first
+	// so that `codeshot render x.ansi -- name.png` keeps the meaning it has
+	// always had.
+	return capture(args, stdin, stdout, stderr)
 }
 
-// wrap runs a command under a pty and pictures it. Its exit code is the
-// child's: codeshot in front of a command must not change what a script
-// gating on that command sees.
-func wrap(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+// capture is both modes that take a live command: one codeshot runs itself
+// after --, and one whose output arrives on standard input. They differ in
+// where the bytes come from and in whether there is an exit code worth
+// having; everything after the source is the same pipeline.
+func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	before, argv, found := cutAtDoubleDash(args)
 	if wantsHelp(before) {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if !found || len(argv) == 0 {
-		fmt.Fprint(stderr, "codeshot: nothing to run; put the command after --, as in "+
-			"`codeshot [name] -- ls -la` (reading output from a pipe is not supported yet)\n")
+	if found && len(argv) == 0 {
+		fmt.Fprint(stderr, "codeshot: nothing after --; the command to run goes there\n")
+		return 2
+	}
+	// Pipe mode is exactly the case where standard input is not a terminal.
+	// At a prompt it is one, and `codeshot shot.png` on its own is somebody
+	// expecting a command.
+	piped := stdin != nil && !tty.IsTerminal(stdin)
+	if !found && !piped {
+		fmt.Fprint(stderr, "codeshot: nothing to picture; put a command after --, as in "+
+			"`codeshot [name] -- ls -la`, or pipe a command's output in\n")
 		return 2
 	}
 	opts, positional, err := parse("codeshot", before, stderr)
@@ -108,25 +138,50 @@ func wrap(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return usageExit(stderr, err)
 	}
 	if len(positional) > 1 {
-		fmt.Fprintf(stderr, "codeshot: one name at most before --, got %q\n", positional)
+		fmt.Fprintf(stderr, "codeshot: one name at most, got %q\n", positional)
 		return 2
 	}
 	name := ""
 	if len(positional) == 1 {
 		name = positional[0]
 	}
+	dest, name, err := opts.output(name, stdout)
+	if err != nil {
+		return usageExit(stderr, err)
+	}
+	// --stdout owns standard output, so what the command printed moves over
+	// to stderr rather than being interleaved into a PNG.
+	passthrough := stdout
+	if opts.stdout {
+		passthrough = stderr
+	}
+
+	var source app.CaptureSource
+	if found {
+		source = pty.Source{
+			Argv:    argv,
+			Command: opts.command,
+			Cwd:     opts.cwd,
+			Cols:    opts.cols,
+			Stdin:   stdin,
+			Stdout:  passthrough,
+			Size:    fileOf(stderr),
+		}
+	} else {
+		source = pipe.Source{
+			In:      stdin,
+			Command: opts.command,
+			Cwd:     opts.cwd,
+			Cols:    opts.cols,
+			Stdout:  passthrough,
+			Size:    fileOf(stderr),
+		}
+	}
+
 	reporter := report.Writer{Err: stderr}
-	// Everything that can fail before the child runs fails here, while
+	// Everything that can fail before the command runs fails here, while
 	// failing still costs nothing: no command has been run for nothing.
-	service, err := opts.build(pty.Source{
-		Argv:    argv,
-		Command: opts.command,
-		Cwd:     opts.cwd,
-		Cols:    opts.cols,
-		Stdin:   stdin,
-		Stdout:  stdout,
-		Size:    fileOf(stderr),
-	}, reporter)
+	service, err := opts.build(source, reporter, dest)
 	if err != nil {
 		fmt.Fprintf(stderr, "codeshot: %v\n", err)
 		return 1
@@ -134,10 +189,10 @@ func wrap(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	out, err := service.Run(opts.request(name))
 	if err != nil {
 		fmt.Fprintf(stderr, "codeshot: %v\n", err)
-		// The child's failure outranks codeshot's. Design §10 says both
+		// The command's failure outranks codeshot's. Design §10 says both
 		// "exit with the child's code" and "a codeshot failure exits 1"; when
 		// both happen, a script gating on `codeshot -- make test` must see
-		// the tests fail, not a theme typo. Only a clean child with a lost
+		// the tests fail, not a theme typo. Only a clean command with a lost
 		// picture exits 1.
 		if out.ExitCode != 0 {
 			return out.ExitCode
@@ -182,6 +237,10 @@ func render(args []string, stdout, stderr io.Writer) int {
 	if len(positional) > 1 {
 		name = positional[1]
 	}
+	dest, name, err := opts.output(name, stdout)
+	if err != nil {
+		return usageExit(stderr, err)
+	}
 	reporter := report.Writer{Err: stderr}
 	service, err := opts.build(file.Source{
 		Path:    positional[0],
@@ -189,7 +248,7 @@ func render(args []string, stdout, stderr io.Writer) int {
 		Cwd:     opts.cwd,
 		Cols:    opts.cols,
 		Warn:    reporter.Warn,
-	}, reporter)
+	}, reporter, dest)
 	if err != nil {
 		fmt.Fprintf(stderr, "codeshot: %v\n", err)
 		return 1
@@ -247,6 +306,9 @@ type options struct {
 	fontSize   float64
 	lineHeight float64
 	gallery    string
+	out        string
+	stdout     bool
+	clip       bool
 	debug      bool
 	chrome     domain.Chrome
 }
@@ -279,6 +341,9 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		fontSize   = fs.Float64("font-size", 13, "")
 		lineHeight = fs.Float64("line-height", 1, "")
 		galleryDir = fs.String("gallery", defaultGallery(), "")
+		out        = fs.String("out", "", "")
+		toStdout   = fs.Bool("stdout", false, "")
+		clip       = fs.Bool("clip", false, "")
 		debug      = fs.Bool("debug", false, "")
 	)
 	// Flags may follow the positional arguments, which flag.FlagSet does not
@@ -337,6 +402,9 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		fontSize:   *fontSize,
 		lineHeight: *lineHeight,
 		gallery:    *galleryDir,
+		out:        *out,
+		stdout:     *toStdout,
+		clip:       *clip,
 		debug:      *debug,
 		chrome:     chrome,
 	}, positional, nil
@@ -346,7 +414,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 // one place that knows which concrete implementation stands behind each port.
 // An error here is codeshot failing at its own job, not the caller mistyping,
 // and exits 1.
-func (o options) build(src app.CaptureSource, reporter report.Writer) (app.Service, error) {
+func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.Gallery) (app.Service, error) {
 	set, err := fonts.Embedded()
 	if err != nil {
 		return app.Service{}, err
@@ -361,9 +429,43 @@ func (o options) build(src app.CaptureSource, reporter report.Writer) (app.Servi
 		Prompt:  prompt.Template{},
 		Themes:  theme.Source{},
 		Render:  raster.New(set, raster.Options{FontSize: o.fontSize, LineHeight: o.lineHeight}),
-		Gallery: gallery.FS{Dir: o.gallery},
+		Gallery: dest,
 		Report:  reporter,
 	}, nil
+}
+
+// output decides where the picture goes and settles the name it is asked to
+// go by. --out and a positional name are two spellings of one thing, and
+// --clip and --stdout each replace the file entirely, so a name alongside
+// either has nothing to name: all three combinations are mistakes worth
+// stopping for rather than precedence rules to remember.
+func (o options) output(name string, stdout io.Writer) (app.Gallery, string, error) {
+	if o.out != "" {
+		if name != "" {
+			return nil, "", fmt.Errorf("--out %s and the name %s say the same thing; use one", o.out, name)
+		}
+		name = o.out
+	}
+	if o.clip && o.stdout {
+		return nil, "", errors.New("--clip and --stdout each replace the file; use one")
+	}
+	if elsewhere := o.clip || o.stdout; elsewhere && name != "" {
+		where := "--clip"
+		if o.stdout {
+			where = "--stdout"
+		}
+		return nil, "", fmt.Errorf("%s writes no file, so there is nothing for %s to name", where, name)
+	}
+	switch {
+	case o.stdout:
+		return gallery.Writer{W: stdout}, name, nil
+	case o.clip:
+		if err := clipboardAvailable(); err != nil {
+			return nil, "", err
+		}
+		return gallery.Clip{Copy: clipboardCopy}, name, nil
+	}
+	return gallery.FS{Dir: o.gallery}, name, nil
 }
 
 func (o options) request(name string) app.Request {
@@ -430,7 +532,8 @@ func hasValue(flag string) bool {
 func takesValue(flag string) bool {
 	switch flag {
 	case "--tail", "-tail", "--no-prompt", "-no-prompt", "--no-title", "-no-title",
-		"--no-shadow", "-no-shadow", "--debug", "-debug":
+		"--no-shadow", "-no-shadow", "--debug", "-debug", "--stdout", "-stdout",
+		"--clip", "-clip":
 		return false
 	}
 	return true
