@@ -39,6 +39,14 @@ var (
 	clipboardAvailable = clipboard.Available
 )
 
+// loadFontIndex is the machine's fonts, as a variable so a test can decide
+// what appears to be installed. The real one is cached between runs; a test
+// that used it would scan several hundred files and then depend on which of
+// them the machine happened to have.
+var loadFontIndex = func() fonts.Index {
+	return fonts.LoadIndex(fonts.CachePath(), fonts.SystemFontDirs())
+}
+
 // loadGhostty is Ghostty's config, as a variable so a test can decide what
 // the machine it runs on appears to have. Without that, the suite's pictures
 // would depend on whether whoever ran it uses Ghostty, and on what theme
@@ -83,6 +91,7 @@ Flags:
   --margin <n>         pixels around the window (default 64, 0 with --no-shadow)
   --no-shadow          drop the drop shadow
   --background <hex>   fill the margin instead of leaving it transparent
+  --font <family>      a font family installed here (codeshot doctor lists them)
   --font-size <n>      points (default 13)
   --line-height <f>    multiple of the font's own height (default 1.0)
   --gallery <dir>      where bare names are stored (default ~/Codeshots)
@@ -319,6 +328,8 @@ type options struct {
 	fontSize   float64
 	lineHeight float64
 	gallery    string
+	// font is --font: the family the caller named, which must exist.
+	font string
 	// fontFamily is what Ghostty's config asked for. Nothing can honour it
 	// until the system font index lands; doctor reports it meanwhile.
 	fontFamily string
@@ -357,6 +368,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		fontSize   = fs.Float64("font-size", 13, "")
 		lineHeight = fs.Float64("line-height", 1, "")
 		galleryDir = fs.String("gallery", defaultGallery(), "")
+		fontName   = fs.String("font", "", "")
 		out        = fs.String("out", "", "")
 		toStdout   = fs.Bool("stdout", false, "")
 		clip       = fs.Bool("clip", false, "")
@@ -439,6 +451,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		fontSize:   *fontSize,
 		lineHeight: *lineHeight,
 		gallery:    *galleryDir,
+		font:       *fontName,
 		fontFamily: gh.FontFamily,
 		out:        *out,
 		stdout:     *toStdout,
@@ -453,7 +466,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 // An error here is codeshot failing at its own job, not the caller mistyping,
 // and exits 1.
 func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.Gallery) (app.Service, error) {
-	set, err := fonts.Embedded()
+	set, err := o.fontSet(reporter)
 	if err != nil {
 		return app.Service{}, err
 	}
@@ -470,6 +483,56 @@ func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.G
 		Gallery: dest,
 		Report:  reporter,
 	}, nil
+}
+
+// fontSet picks the family to draw with: --font, then whatever Ghostty's
+// config asked for, then the embedded one. The index goes in either way, so
+// that a rune the family has no glyph for can still be found somewhere on
+// the machine.
+//
+// The two ways of naming a font fail differently. --font is a request, and a
+// request for a font that is not installed is a mistake worth stopping for.
+// Ghostty's font-family is a setting from someone else's file that codeshot
+// is reading opportunistically, so a family it cannot find is worth a word
+// on stderr and nothing more.
+func (o options) fontSet(reporter report.Writer) (*fonts.Set, error) {
+	index := loadFontIndex()
+	name := o.font
+	if name == "" {
+		name = o.fontFamily
+	}
+	if name == "" {
+		set, err := fonts.Embedded()
+		if err != nil {
+			return nil, err
+		}
+		return set.WithIndex(index), nil
+	}
+	family, ok := index.Lookup(name)
+	if !ok {
+		if o.font != "" {
+			return nil, fmt.Errorf("no font family called %q is installed; `codeshot doctor` lists what is", name)
+		}
+		reporter.Warn(fmt.Sprintf("Ghostty's font-family is %q, which is not installed here; using the embedded font", name))
+		set, err := fonts.Embedded()
+		if err != nil {
+			return nil, err
+		}
+		return set.WithIndex(index), nil
+	}
+	set, err := fonts.Load(family)
+	if err != nil {
+		if o.font != "" {
+			return nil, err
+		}
+		reporter.Warn(fmt.Sprintf("%v; using the embedded font", err))
+		set, err := fonts.Embedded()
+		if err != nil {
+			return nil, err
+		}
+		return set.WithIndex(index), nil
+	}
+	return set.WithIndex(index), nil
 }
 
 // themeSource resolves theme names against the embedded themes first and a

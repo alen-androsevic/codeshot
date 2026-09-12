@@ -3,6 +3,7 @@ package raster
 import (
 	"image"
 	"image/draw"
+	"math"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
@@ -57,23 +58,32 @@ func (r Renderer) drawGlyphs(img *image.RGBA, l layout, th domain.Theme, line []
 			r.drawDecorations(img, l, th, cell, x, top, baseline)
 			continue
 		}
-		face, err := r.fonts.Face(cell.Style, l.sizePx)
+		// FaceFor, not Face: the rune decides which font draws it, so a
+		// glyph the chosen family lacks is picked up by something that has
+		// it rather than drawn as tofu.
+		face, err := r.fonts.FaceFor(cell.Rune, cell.Style, l.sizePx)
 		if err != nil {
 			return err
 		}
 		fg, _ := th.Resolve(cell.Style)
-		d := font.Drawer{
-			Dst:  img,
-			Src:  image.NewUniform(rgba(fg)),
-			Face: face,
-			Dot:  fixed.P(l.grid.X+x*l.metrics.CellW, baseline),
-		}
-		start := d.Dot
-		d.DrawString(string(cell.Rune) + cell.Combining)
-		if r.fonts.SyntheticBold(cell.Style) {
-			d.Dot = start
-			d.Dot.X += fixed.I(l.scale)
-			d.DrawString(string(cell.Rune) + cell.Combining)
+		text := string(cell.Rune) + cell.Combining
+		left := l.grid.X + x*l.metrics.CellW
+		if r.fonts.SyntheticItalic(cell.Style) {
+			r.drawSheared(img, l, face, fg, text, left, baseline, cell.Style)
+		} else {
+			d := font.Drawer{
+				Dst:  img,
+				Src:  image.NewUniform(rgba(fg)),
+				Face: face,
+				Dot:  fixed.P(left, baseline),
+			}
+			start := d.Dot
+			d.DrawString(text)
+			if r.fonts.SyntheticBold(cell.Style) {
+				d.Dot = start
+				d.Dot.X += fixed.I(l.scale)
+				d.DrawString(text)
+			}
 		}
 		r.drawDecorations(img, l, th, cell, x, top, baseline)
 	}
@@ -96,5 +106,43 @@ func (r Renderer) drawDecorations(img *image.RGBA, l layout, th domain.Theme, ce
 	if cell.Style.Has(domain.AttrStrike) {
 		y := baseline - l.metrics.Ascent/3
 		draw.Draw(img, image.Rect(left, y, right, y+thickness), image.NewUniform(rgba(fg)), image.Point{}, draw.Src)
+	}
+}
+
+// shearTangent is the tangent of design §7's 12 degrees, the slant a
+// synthetic italic gets when the family has no italic cut of its own.
+const shearTangent = 0.2126
+
+// drawSheared draws text slanted, for a family with no italic cut. The glyph
+// goes onto a transparent scratch image first and is copied back a row at a
+// time, each row shifted by its distance from the baseline: above it to the
+// right, below it to the left, so the letter leans while standing on the same
+// spot. Rows are shifted by whole pixels rather than resampled, which keeps
+// stems crisp and the output byte-identical from one machine to the next.
+func (r Renderer) drawSheared(img *image.RGBA, l layout, face font.Face, fg domain.RGBA, text string, left, baseline int, st domain.Style) {
+	// A cell of slack on each side, and half a cell above and below, so
+	// ascenders, descenders and the lean itself have somewhere to go.
+	originX, originY := l.metrics.CellW, l.metrics.CellH
+	scratch := image.NewRGBA(image.Rect(0, 0, 3*l.metrics.CellW, 3*l.metrics.CellH))
+	d := font.Drawer{
+		Dst:  scratch,
+		Src:  image.NewUniform(rgba(fg)),
+		Face: face,
+		Dot:  fixed.P(originX, originY),
+	}
+	start := d.Dot
+	d.DrawString(text)
+	if r.fonts.SyntheticBold(st) {
+		d.Dot = start
+		d.Dot.X += fixed.I(l.scale)
+		d.DrawString(text)
+	}
+
+	b := scratch.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		dx := int(math.Round(shearTangent * float64(originY-y)))
+		draw.Draw(img,
+			image.Rect(left-originX+dx, baseline-originY+y, left-originX+dx+b.Dx(), baseline-originY+y+1),
+			scratch, image.Pt(b.Min.X, y), draw.Over)
 	}
 }

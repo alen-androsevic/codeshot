@@ -44,10 +44,21 @@ type faceKey struct {
 // safe to draw with from two goroutines at once.
 type Set struct {
 	fonts [4]*sfnt.Font
+	// name is the family this was loaded from; empty means the embedded one.
+	name string
+	// index is where the fallback chain's candidates are looked up. A zero
+	// Index simply finds nothing, which leaves the embedded family as the
+	// only fallback.
+	index Index
 
 	mu    sync.Mutex
 	faces map[faceKey]font.Face
-	buf   sfnt.Buffer
+	// fallbacks are consulted, in order, for a rune the family has no glyph
+	// for; fallbackFaces caches the sized faces built from them.
+	fallbacks       []*sfnt.Font
+	fallbacksLoaded bool
+	fallbackFaces   map[fallbackKey]font.Face
+	buf             sfnt.Buffer
 }
 
 const (
@@ -122,16 +133,22 @@ func (s *Set) face(st domain.Style, sizePx float64) (font.Face, error) {
 	if src == nil {
 		src = s.fonts[variantRegular]
 	}
-	f, err := opentype.NewFace(src, &opentype.FaceOptions{
-		Size:    sizePx,
-		DPI:     72,
-		Hinting: font.HintingFull,
-	})
+	f, err := newFace(src, sizePx)
 	if err != nil {
 		return nil, err
 	}
 	s.faces[key] = f
 	return f, nil
+}
+
+// newFace sizes a font. DPI is fixed at 72 so that one point is one pixel and
+// the callers do the scaling arithmetic once.
+func newFace(f *sfnt.Font, sizePx float64) (font.Face, error) {
+	return opentype.NewFace(f, &opentype.FaceOptions{
+		Size:    sizePx,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
 }
 
 // Metrics holds the lock across its reads of the face, not merely across the

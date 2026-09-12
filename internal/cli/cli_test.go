@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/ghostty"
 	"codeshot/internal/adapters/theme"
 )
@@ -678,6 +679,7 @@ func stubClipboard(copy func([]byte) error) func() {
 // here by it. Tests that want a config say so themselves.
 func TestMain(m *testing.M) {
 	loadGhostty = func() (ghostty.Config, bool) { return ghostty.Config{}, false }
+	loadFontIndex = func() fonts.Index { return fonts.Index{} }
 	os.Exit(m.Run())
 }
 
