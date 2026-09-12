@@ -129,6 +129,15 @@ That package is now `internal/cli` rather than `cmd/codeshot`.)*
 | `Clipboard` | `pbcopy` / `wl-copy` / `xclip` | — |
 | `Tty` | unix ioctl (size, isatty) | ConPTY / Windows |
 
+*Amended during implementation:* `Clipboard` is not a port either, and for a
+different reason than `Tty`. A clipboard is not a second kind of thing
+codeshot drives; it is somewhere a picture can go, which is what `Gallery`
+already means. `--clip` and `--stdout` are `Gallery` implementations
+(`gallery.Clip`, `gallery.Writer`) chosen by the CLI, and the app layer never
+learns that either exists. `pbcopy` in the table above is wrong in fact as
+well: it puts everything on the pasteboard as text unless it is EPS or RTF,
+so macOS goes through `osascript` and «class PNGf».
+
 *Amended during implementation:* `Tty` is not a port. Nothing in
 `internal/app` ever asks for a terminal's size or puts one in raw mode — only
 the CLI and the pty source do, both on the edge — so a port for it would be
@@ -227,6 +236,13 @@ shim, pass `--command "…"` by hand or the prompt line is omitted.
 
 This mode is honestly degraded: a pipe is not a tty, so tools that check
 `isatty` drop their colour. The docs say so and point at the wrapper.
+
+*Amended during implementation:* pipe mode passes its input through to stdout
+as it reads, the way `tee` would, so a pipeline does not go dark while it
+runs — the same promise wrapper mode makes. The shims split the part that can
+be tested (`_codeshot_strip_pipe`, which drops the trailing `| codeshot …`)
+from the part that cannot (`fc -ln -1`, which needs an interactive shell's
+history), and the strip is tested in both zsh and bash.
 
 ### Render — `codeshot render session.ansi out.png`
 
@@ -355,7 +371,7 @@ added — including one with a dot for some other reason, like `v0.2.0` or
 
 Flags, in four groups, each mirrored by a `~/.config/codeshot/config.toml` key:
 
-- **output** — `--out`, `--gallery`, `--clip`, `--stdout`, `--force`
+- **output** — `--out`, `--gallery`, `--clip`, `--stdout`, ~~`--force`~~
 - **frame** — `--cols`, `--rows`, `--tail`, `--prompt`, `--no-prompt`,
   `--command`, `--cwd`
 - **window** — `--controls macos|linux|none`, `--title`, `--no-title`,
@@ -363,6 +379,15 @@ Flags, in four groups, each mirrored by a `~/.config/codeshot/config.toml` key:
 - **style** — `--theme`, `--font`, `--font-size`, `--line-height`
 
 `--stdout` writes the PNG to stdout and moves passthrough to stderr.
+
+*Amended during implementation:* `--out` is a second spelling of `[name]`,
+and giving both is a usage error rather than a precedence rule. `--clip`
+replaces the file rather than adding to it — the picture goes to the
+clipboard and nowhere else — so a name alongside `--clip` or `--stdout` is a
+usage error too, as is asking for both destinations at once. `--force` was
+dropped: it existed to unlock overwriting an existing file, and an explicit
+name still overwrites, so it would guard nothing. Generated names step
+around what is already there, as they always did.
 
 ## 10. Errors and exit codes
 

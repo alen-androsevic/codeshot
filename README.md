@@ -14,6 +14,7 @@ printed.
 
 ```
 codeshot [name] [flags] -- <command> [args...]   run a command and picture it
+<command> | codeshot [name] [flags]              picture what comes in
 codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
 codeshot themes                                  list the embedded themes
 codeshot version
@@ -31,6 +32,17 @@ redirected stdout holds exactly what the command printed.
 gallery, anything with a path separator is used as given); omitted, codeshot
 derives one from the command (`ls -la` becomes `ls-la.png`) and steps around
 whatever is already in the gallery rather than overwriting it.
+
+A pipeline works too, for one already written: `npm test | codeshot shot.png`
+reads standard input and passes it through. It is the weaker half - a pipe is
+not a terminal, so the command on the left has already dropped its colour,
+and codeshot cannot know what that command was. `shim/codeshot.zsh` and
+`shim/codeshot.bash` recover the command line from your shell's history;
+`--command` says it by hand.
+
+The picture does not have to become a file: `--clip` copies it to the
+clipboard instead, and `--stdout` writes the PNG to standard output for
+another program to read.
 
 `render` is the same pipeline fed from a file instead: the raw bytes a
 terminal would have received, escape sequences and all. They need to have

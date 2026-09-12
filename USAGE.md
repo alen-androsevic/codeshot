@@ -25,9 +25,17 @@ command's own status, so it's safe in front of anything a script checks.
 ```sh
 # Name the file yourself
 codeshot shot.png -- npm test
+codeshot --out shot.png -- npm test        # the same thing
 
 # Write somewhere specific (any name with a / is a path)
 codeshot ~/Desktop/shot.png -- npm test
+
+# Straight to the clipboard, no file at all
+codeshot --clip -- git status
+
+# Straight to a pipeline
+codeshot --stdout -- git status > shot.png
+codeshot --stdout -- git status | pngquant - > small.png
 
 # First 12 lines only, or the last 12
 codeshot --rows 12 -- npm test
@@ -66,6 +74,35 @@ command, `--help` included.
 
 Run `codeshot --help` for every flag.
 
+## Piping into codeshot
+
+If the pipeline is already written, codeshot reads standard input:
+
+```sh
+npm test | codeshot shot.png --command "npm test"
+```
+
+The output still passes through, so you see the run as it happens.
+
+Two things are worse this way, and neither is fixable from codeshot's side.
+A pipe is not a terminal, so most tools turn their colour **off** before
+codeshot sees a single byte — pass `--color=always` (or the tool's
+equivalent) if it has one. And codeshot cannot know what the command was, so
+the prompt line is empty unless you pass `--command`.
+
+The shims fix the second one by reading the command from your shell's
+history:
+
+```sh
+source /path/to/codeshot/shim/codeshot.zsh    # or .bash, from ~/.zshrc
+npm test | codeshot shot.png                  # prompt line says "npm test"
+```
+
+They only work where you type — a non-interactive shell keeps no history —
+and they stand aside for `codeshot -- cmd` and for an explicit `--command`.
+
+The wrapper has neither problem. Prefer it when you can.
+
 ## Rendering a saved dump
 
 If you already have the raw bytes of a terminal session, render them
@@ -87,8 +124,11 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | Symptom | Fix |
 | --- | --- |
 | `ls` has no colour on macOS | That's `ls`, not codeshot: use `ls -G`, or `export CLICOLOR=1` |
+| Piped output is grey | A pipe is not a terminal, so the tool dropped its colour. Use the wrapper, or `--color=always` |
+| Piped output has no prompt line | codeshot can't know the command: pass `--command`, or source a shim |
 | Wrapping differs from your terminal | codeshot sizes from stderr; if that's redirected it falls back to 100 columns. Pass `--cols` |
-| Piped input shows no colour or prompt | Only the command's *output* is on a terminal when stdin is a pipe or file; most tools only check output, but a few check stdin too |
+| `--clip` says no clipboard tool | Linux needs `wl-clipboard` (Wayland) or `xclip` (X11); macOS needs nothing |
+| `--stdout` printed junk in my terminal | That's the PNG. Redirect it: `codeshot --stdout -- cmd > shot.png` |
 | `render`: lines march right across the image | The dump didn't go through a pty; use `codeshot -- cmd` instead |
 | `no background or foreground colour` | You pointed `--theme` at a Ghostty *config*, not a theme file |
 | Emoji and Nerd Font icons are boxes | Known limitation — the embedded font can't render them |

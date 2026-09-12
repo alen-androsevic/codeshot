@@ -1,47 +1,25 @@
 # codeshot — what's left
 
-Phase 1 is merged: the pure `bytes → PNG` core, a VT emulator, a native
-rasteriser, and `codeshot render`. Phase 2's wrapper has landed too:
-`codeshot -- ls -la` runs the command under a pty and pictures it. This file
-is everything still owed,
+Phases 1 and 2 are merged: the pure `bytes → PNG` core, a VT emulator, a
+native rasteriser, `codeshot render`, and capture - `codeshot -- ls -la`
+under a pty, `npm test | codeshot` from a pipe, and the flags that decide
+where the picture goes. This file is everything still owed,
 in the order it makes sense to do it. Design rationale lives in
 `docs/design.md`; decisions already settled are in `docs/adr/`.
 
 ---
 
-## Phase 2 — capture, what is left
+## Phase 2 — done
 
-The wrapper is done (`internal/adapters/capture/pty`, wired in
-`internal/cli`), along with the two refactors that had to precede it: the
-parse/build split in the CLI and the carriage-return warning moving into
-`file.Source`. What remains:
+The wrapper (`capture/pty`), pipe mode (`capture/pipe`), the shared
+passthrough (`capture/tap`), the clipboard adapter, `--out`, `--stdout`,
+`--clip` and the shell shims are all in, along with the two refactors that
+had to precede them: the parse/build split in the CLI and the
+carriage-return warning moving into `file.Source`.
 
-**2.2 Pipe mode — `npm test | codeshot shot.png`**
-Read stdin to EOF. Ship optional shell shims (`shim/codeshot.zsh`,
-`shim/codeshot.bash`) that recover the command text from `fc -ln -1` and
-strip the trailing `| codeshot …`, so the prompt line is right without
-`--command`. Document plainly that a pipe is not a tty and most tools drop
-their colour — the wrapper is the answer, this is the fallback.
-
-Today a bare `codeshot shot.png` with no `--` is a usage error that says pipe
-mode is not supported yet; that is the branch in `cli.wrap` this replaces.
-
-**2.5 The flags phase 2 implies**
-`--out`, `--stdout` (PNG to stdout, passthrough moves to stderr), `--clip`
-(pbcopy / wl-copy / xclip behind a `Clipboard` port), `--force`.
-`--stdout` is the one that touches the wrapper: `pty.Source.Stdout` is
-where passthrough goes, so switching it to stderr is a one-field change in
-`cli.wrap`.
-
-**Wrapper follow-ups**
-- Typeahead during rendering is lost. The goroutine forwarding a terminal
-  stdin into the pty cannot be cancelled (a blocking read on a tty has no
-  deadline), so keys typed after the child exits but before codeshot does
-  are read and dropped. `script` has the same property; worth a note in
-  USAGE.md if anyone trips on it.
-- A background grandchild that keeps the pty open keeps codeshot waiting,
-  since end-of-output is the last holder of the pty closing it. Same as
-  `script`; no fix planned.
+`--force` was dropped rather than built: an explicit name still overwrites,
+so there is nothing for it to unlock. If refusing to overwrite ever becomes
+the default, this is the flag that would make it bearable.
 
 ---
 
@@ -140,6 +118,16 @@ Carried from the final review's triage. None block use; all are real.
 ## Known limitations to keep documenting
 
 - Emoji and unpatched Nerd Font glyphs render as tofu (3.5, 3.3).
+- Typeahead during rendering is lost. The goroutine forwarding a terminal
+  stdin into the pty cannot be cancelled - a blocking read on a tty has no
+  deadline - so keys typed after the child exits but before codeshot does
+  are read and dropped. `script` has the same property.
+- A background grandchild holding the pty open keeps codeshot waiting, since
+  end-of-output is the last holder of the pty closing it. Same as `script`.
+- The shims only work in an interactive shell, because `fc` needs history.
+  The stripping half is tested; the history lookup is not testable.
+- Pipe mode cannot recover colour a tool dropped on seeing a pipe, and
+  cannot learn the command without a shim or `--command`.
 - codeshot cannot reach a command that has already finished. That is a
   deliberate consequence of never re-running and keeping no recorder — the
   reasoning is in `docs/design.md` §2.
