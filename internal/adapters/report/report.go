@@ -14,7 +14,13 @@ type Writer struct {
 	Err io.Writer
 }
 
+// Stored says where the picture went, unless there is nowhere to name:
+// --stdout sends the PNG to whatever is reading stdout, and there is no file
+// to report.
 func (w Writer) Stored(path string) {
+	if path == "" {
+		return
+	}
 	fmt.Fprintf(w.Err, "Stored codeshot in %s\n", tildify(path))
 }
 

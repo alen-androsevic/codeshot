@@ -8,7 +8,6 @@
 package pty
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +21,7 @@ import (
 
 	creack "github.com/creack/pty"
 
+	"codeshot/internal/adapters/capture/tap"
 	"codeshot/internal/adapters/tty"
 	"codeshot/internal/domain"
 )
@@ -149,8 +149,8 @@ func (s Source) Capture() (domain.Capture, error) {
 		go io.Copy(ptmx, s.Stdin)
 	}
 
-	var captured bytes.Buffer
-	_, err = io.Copy(&tee{out: s.Stdout, buf: &captured}, ptmx)
+	captured := tap.New(s.Stdout)
+	_, err = io.Copy(captured, ptmx)
 	// A pty master reports EIO once the last holder of the other end is gone.
 	// That is how a pty says end-of-output, not a failure.
 	if err != nil && !errors.Is(err, syscall.EIO) {
@@ -200,25 +200,6 @@ func (w *windowSize) get() (cols, rows int) {
 func (w *windowSize) winsize() *creack.Winsize {
 	cols, rows := w.get()
 	return &creack.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
-}
-
-// tee writes everything to the buffer and passes it through to out, until out
-// fails. A passthrough that has stopped accepting output must not stop the
-// capture: the child would block on a full pty and never finish.
-type tee struct {
-	out    io.Writer
-	buf    *bytes.Buffer
-	broken bool
-}
-
-func (t *tee) Write(p []byte) (int, error) {
-	t.buf.Write(p)
-	if !t.broken && t.out != nil {
-		if _, err := t.out.Write(p); err != nil {
-			t.broken = true
-		}
-	}
-	return len(p), nil
 }
 
 // exitCode turns what Wait said into what a shell would have put in $?. A
