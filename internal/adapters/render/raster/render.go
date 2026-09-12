@@ -32,7 +32,8 @@ type layout struct {
 	metrics  fonts.Metrics
 	sizePx   float64
 	margin   int
-	padding  int
+	paddingX int
+	paddingY int
 	titlebar int
 	window   image.Rectangle // within the whole image
 	grid     image.Point     // top-left of the first cell
@@ -52,17 +53,18 @@ func (r Renderer) layout(w domain.Window) (layout, error) {
 	}
 	l.metrics = m
 	l.margin = w.Chrome.Margin * scale
-	l.padding = w.Chrome.Padding * scale
+	l.paddingX = w.Chrome.PaddingX * scale
+	l.paddingY = w.Chrome.PaddingY * scale
 	l.titlebar = 0
 	if w.Chrome.Controls != domain.ControlsNone || w.Chrome.ShowTitle {
 		l.titlebar = w.Chrome.TitlebarHeight * scale
 	}
 	l.cols = w.Frame.Grid.Cols
 	l.rows = w.Frame.Grid.Rows()
-	winW := l.cols*m.CellW + 2*l.padding
-	winH := l.rows*m.CellH + 2*l.padding + l.titlebar
+	winW := l.cols*m.CellW + 2*l.paddingX
+	winH := l.rows*m.CellH + 2*l.paddingY + l.titlebar
 	l.window = image.Rect(l.margin, l.margin, l.margin+winW, l.margin+winH)
-	l.grid = image.Pt(l.window.Min.X+l.padding, l.window.Min.Y+l.titlebar+l.padding)
+	l.grid = image.Pt(l.window.Min.X+l.paddingX, l.window.Min.Y+l.titlebar+l.paddingY)
 	return l, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"codeshot/internal/adapters/clipboard"
 	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/gallery"
+	"codeshot/internal/adapters/ghostty"
 	"codeshot/internal/adapters/prompt"
 	"codeshot/internal/adapters/render/raster"
 	"codeshot/internal/adapters/report"
@@ -37,6 +38,12 @@ var (
 	clipboardCopy      = clipboard.Copy
 	clipboardAvailable = clipboard.Available
 )
+
+// loadGhostty is Ghostty's config, as a variable so a test can decide what
+// the machine it runs on appears to have. Without that, the suite's pictures
+// would depend on whether whoever ran it uses Ghostty, and on what theme
+// they had set that day.
+var loadGhostty = ghostty.Load
 
 const usage = `codeshot - a picture of a command and what it printed
 
@@ -98,7 +105,13 @@ func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "codeshot %s\n", Version)
 		return 0
 	case "themes":
-		fmt.Fprint(stdout, "codeshot-dark\ncodeshot-light\n")
+		// Asking the source rather than naming the two embedded themes here:
+		// with a Ghostty installation's directories in the list this prints
+		// the several hundred that actually resolve, and it cannot go stale
+		// the way a hardcoded pair does.
+		for _, name := range themeSource().Installed() {
+			fmt.Fprintln(stdout, name)
+		}
 		return 0
 	case "render":
 		return render(args[1:], stdout, stderr)
@@ -306,6 +319,9 @@ type options struct {
 	fontSize   float64
 	lineHeight float64
 	gallery    string
+	// fontFamily is what Ghostty's config asked for. Nothing can honour it
+	// until the system font index lands; doctor reports it meanwhile.
+	fontFamily string
 	out        string
 	stdout     bool
 	clip       bool
@@ -356,7 +372,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 
 	chrome := domain.DefaultChrome()
 	chrome.Scale = *scale
-	chrome.Padding = *padding
+	chrome.PaddingX, chrome.PaddingY = *padding, *padding
 	chrome.Margin = *margin
 	if *noShadow && !named["margin"] {
 		// The margin exists to hold the blur, which spreads about forty
@@ -391,6 +407,27 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		chrome.Background = &c
 	}
 
+	// Ghostty's config fills in what the caller did not name, which is what
+	// makes a shot look like the terminal it came from. Design §4's
+	// precedence, from strongest: flags, codeshot's own config, Ghostty's,
+	// built-in defaults. Anything Ghostty says that codeshot cannot make
+	// sense of was already dropped by the parser.
+	gh, _ := loadGhostty()
+	if !named["theme"] && gh.Theme != "" {
+		*themeName = gh.Theme
+	}
+	if !named["font-size"] && gh.FontSize > 0 {
+		*fontSize = gh.FontSize
+	}
+	if !named["padding"] {
+		if gh.PaddingX > 0 {
+			chrome.PaddingX = gh.PaddingX
+		}
+		if gh.PaddingY > 0 {
+			chrome.PaddingY = gh.PaddingY
+		}
+	}
+
 	return options{
 		command:    *command,
 		cwd:        *cwd,
@@ -402,6 +439,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		fontSize:   *fontSize,
 		lineHeight: *lineHeight,
 		gallery:    *galleryDir,
+		fontFamily: gh.FontFamily,
 		out:        *out,
 		stdout:     *toStdout,
 		clip:       *clip,
@@ -427,11 +465,19 @@ func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.G
 		Source:  src,
 		Emu:     emulator,
 		Prompt:  prompt.Template{},
-		Themes:  theme.Source{},
+		Themes:  themeSource(),
 		Render:  raster.New(set, raster.Options{FontSize: o.fontSize, LineHeight: o.lineHeight}),
 		Gallery: dest,
 		Report:  reporter,
 	}, nil
+}
+
+// themeSource resolves theme names against the embedded themes first and a
+// local Ghostty installation's several hundred second, which is what makes
+// --theme tokyonight work without codeshot shipping copies of other
+// projects' palettes under their names.
+func themeSource() theme.Source {
+	return theme.Source{Dirs: theme.GhosttyDirs()}
 }
 
 // output decides where the picture goes and settles the name it is asked to

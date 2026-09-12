@@ -14,10 +14,15 @@ const (
 // Chrome is everything around the grid. Lengths are pixels at Scale 1 and are
 // multiplied by Scale when rasterised.
 type Chrome struct {
-	Controls       Controls
-	Title          string
-	ShowTitle      bool
-	Padding        int
+	Controls  Controls
+	Title     string
+	ShowTitle bool
+	// PaddingX and PaddingY are the gaps between the grid and the window's
+	// edges. They are separate because Ghostty's are: window-padding-x and
+	// window-padding-y are set independently, and a shot that means to look
+	// like that window has to be able to follow both.
+	PaddingX       int
+	PaddingY       int
 	Radius         int
 	TitlebarHeight int
 	Shadow         bool
@@ -32,7 +37,8 @@ func DefaultChrome() Chrome {
 	return Chrome{
 		Controls:       ControlsMacOS,
 		ShowTitle:      true,
-		Padding:        14,
+		PaddingX:       14,
+		PaddingY:       14,
 		Radius:         10,
 		TitlebarHeight: 28,
 		Shadow:         true,

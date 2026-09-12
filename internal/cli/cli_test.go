@@ -3,11 +3,16 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codeshot/internal/adapters/ghostty"
+	"codeshot/internal/adapters/theme"
 )
 
 func writeANSI(t *testing.T) string {
@@ -665,4 +670,128 @@ func stubClipboard(copy func([]byte) error) func() {
 	clipboardCopy = copy
 	clipboardAvailable = func() error { return nil }
 	return func() { clipboardCopy, clipboardAvailable = oldCopy, oldAvailable }
+}
+
+// TestMain stubs Ghostty's config away for the whole suite. Without it these
+// tests would read the config of whoever ran them - a theme, a font size and
+// a padding belonging to their machine - and decide the pictures asserted
+// here by it. Tests that want a config say so themselves.
+func TestMain(m *testing.M) {
+	loadGhostty = func() (ghostty.Config, bool) { return ghostty.Config{}, false }
+	os.Exit(m.Run())
+}
+
+func stubGhostty(cfg ghostty.Config) func() {
+	old := loadGhostty
+	loadGhostty = func() (ghostty.Config, bool) { return cfg, true }
+	return func() { loadGhostty = old }
+}
+
+// renderedImage runs render into a fresh gallery and decodes what came out.
+func renderedImage(t *testing.T, extra ...string) image.Image {
+	t.Helper()
+	dir := t.TempDir()
+	args := append([]string{"render", writeANSI(t), "shot.png", "--gallery", dir}, extra...)
+	var stdout, stderr bytes.Buffer
+	if code := Run(args, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	f, err := os.Open(filepath.Join(dir, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+// middle is a pixel well inside the window body, where the terminal's
+// background colour is what shows.
+func middle(img image.Image) color.Color {
+	b := img.Bounds()
+	return img.At(b.Dx()/2, b.Dy()/2)
+}
+
+func sameColor(a, b color.Color) bool {
+	ar, ag, ab, _ := a.RGBA()
+	br, bg, bb, _ := b.RGBA()
+	return ar == br && ag == bg && ab == bb
+}
+
+// TestGhosttyConfigSuppliesTheTheme is 3.1's payoff: the shot looks like the
+// terminal it came from without anyone passing a flag.
+func TestGhosttyConfigSuppliesTheTheme(t *testing.T) {
+	defer stubGhostty(ghostty.Config{Theme: "codeshot-light"})()
+
+	light, err := theme.Source{}.Theme("codeshot-light")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := middle(renderedImage(t))
+	if !sameColor(got, color.RGBA{light.Background.R, light.Background.G, light.Background.B, 0xFF}) {
+		t.Errorf("background = %v, want Ghostty's configured theme %v", got, light.Background)
+	}
+}
+
+// TestFlagsBeatGhosttyConfig is the precedence design §4 sets out: the flag
+// is the strongest thing in the room.
+func TestFlagsBeatGhosttyConfig(t *testing.T) {
+	defer stubGhostty(ghostty.Config{Theme: "codeshot-light", FontSize: 30, PaddingX: 40, PaddingY: 40})()
+
+	dark, err := theme.Source{}.Theme("codeshot-dark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := middle(renderedImage(t, "--theme", "codeshot-dark"))
+	if !sameColor(got, color.RGBA{dark.Background.R, dark.Background.G, dark.Background.B, 0xFF}) {
+		t.Errorf("background = %v, want the flag's theme %v", got, dark.Background)
+	}
+
+	withFlag := renderedImage(t, "--font-size", "13", "--padding", "14").Bounds().Dx()
+	plain := renderedImage(t, "--font-size", "13", "--padding", "14").Bounds().Dx()
+	if withFlag != plain {
+		t.Errorf("widths %d and %d differ; the flags should have settled both", withFlag, plain)
+	}
+}
+
+// TestGhosttyConfigSuppliesSizeAndPadding: a bigger font and a wider padding
+// both make a wider picture, which is the cheapest true statement about them.
+// Padding is in logical pixels and multiplied by --scale, so these render at
+// scale 1 and the arithmetic below is the padding itself.
+func TestGhosttyConfigSuppliesSizeAndPadding(t *testing.T) {
+	plain := renderedImage(t, "--scale", "1").Bounds().Dx()
+
+	restore := stubGhostty(ghostty.Config{FontSize: 26})
+	bigFont := renderedImage(t, "--scale", "1").Bounds().Dx()
+	restore()
+
+	restore = stubGhostty(ghostty.Config{PaddingX: 60, PaddingY: 60})
+	padded := renderedImage(t, "--scale", "1").Bounds().Dx()
+	restore()
+
+	if bigFont <= plain {
+		t.Errorf("font-size 26 gave width %d, want wider than the default's %d", bigFont, plain)
+	}
+	if padded != plain+2*(60-14) {
+		t.Errorf("padding 60 gave width %d, want %d", padded, plain+2*(60-14))
+	}
+}
+
+// TestPaddingXAndYAreSeparate: Ghostty sets them independently, so a config
+// with only a horizontal padding must not move the vertical one.
+func TestPaddingXAndYAreSeparate(t *testing.T) {
+	plain := renderedImage(t, "--scale", "1").Bounds()
+
+	defer stubGhostty(ghostty.Config{PaddingX: 40})()
+	wide := renderedImage(t, "--scale", "1").Bounds()
+
+	if wide.Dx() != plain.Dx()+2*(40-14) {
+		t.Errorf("width %d, want %d", wide.Dx(), plain.Dx()+2*(40-14))
+	}
+	if wide.Dy() != plain.Dy() {
+		t.Errorf("height %d, want the vertical padding untouched at %d", wide.Dy(), plain.Dy())
+	}
 }

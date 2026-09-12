@@ -85,7 +85,7 @@ func TestLinuxControlsAtImageEdgeDoNotPanic(t *testing.T) {
 	render(t, chromed(g, testTheme(), func(c *domain.Chrome) {
 		c.Controls = domain.ControlsLinux
 		c.Margin = 0
-		c.Padding = 0
+		c.PaddingX, c.PaddingY = 0, 0
 	}))
 }
 
