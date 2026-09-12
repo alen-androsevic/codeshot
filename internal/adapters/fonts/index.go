@@ -49,6 +49,11 @@ func SystemFontDirs() []string {
 	return found
 }
 
+// FallbackFamilies is the platform's fallback chain, in order: the families
+// consulted for a rune the chosen font has no glyph for. Exported so that
+// `codeshot doctor` can say which of them are actually installed.
+func FallbackFamilies() []string { return fallbackFamilies() }
+
 // CachePath is where the index is kept between runs.
 func CachePath() string {
 	dir, err := os.UserCacheDir()
