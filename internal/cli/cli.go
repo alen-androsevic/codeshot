@@ -10,11 +10,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"codeshot/internal/adapters/capture/file"
 	"codeshot/internal/adapters/capture/pipe"
 	"codeshot/internal/adapters/capture/pty"
 	"codeshot/internal/adapters/clipboard"
+	"codeshot/internal/adapters/config"
 	"codeshot/internal/adapters/fonts"
 	"codeshot/internal/adapters/gallery"
 	"codeshot/internal/adapters/ghostty"
@@ -59,7 +61,8 @@ Usage:
   codeshot [name] [flags] -- <command> [args...]   run a command and picture it
   <command> | codeshot [name] [flags]              picture what comes in
   codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
-  codeshot themes                                  list the embedded themes
+  codeshot themes                                  list the themes that resolve
+  codeshot doctor                                  report what codeshot found here
   codeshot version
 
 With no name, the shot is named after the command (ls -la -> ls-la.png) and
@@ -92,6 +95,9 @@ Flags:
   --no-shadow          drop the drop shadow
   --background <hex>   fill the margin instead of leaving it transparent
   --font <family>      a font family installed here (codeshot doctor lists them)
+  --prompt <text>      the prompt template; {cwd} is the directory
+  --radius <n>         corner radius (default 10)
+  --config <path>      read defaults from here instead of the usual place
   --font-size <n>      points (default 13)
   --line-height <f>    multiple of the font's own height (default 1.0)
   --gallery <dir>      where bare names are stored (default ~/Codeshots)
@@ -122,6 +128,8 @@ func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, name)
 		}
 		return 0
+	case "doctor":
+		return doctor(args[1:], stdout, stderr)
 	case "render":
 		return render(args[1:], stdout, stderr)
 	}
@@ -328,8 +336,15 @@ type options struct {
 	fontSize   float64
 	lineHeight float64
 	gallery    string
+	// unknownConfigKeys are keys in codeshot's own config that are not flag
+	// names. That file is codeshot's, so a key it does not know is a typo
+	// worth mentioning rather than a setting that is none of its business.
+	unknownConfigKeys []string
+	configPath        string
 	// font is --font: the family the caller named, which must exist.
 	font string
+	// prompt is --prompt: the template drawn above the output.
+	prompt string
 	// fontFamily is what Ghostty's config asked for. Nothing can honour it
 	// until the system font index lands; doctor reports it meanwhile.
 	fontFamily string
@@ -369,6 +384,9 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		lineHeight = fs.Float64("line-height", 1, "")
 		galleryDir = fs.String("gallery", defaultGallery(), "")
 		fontName   = fs.String("font", "", "")
+		promptText = fs.String("prompt", "", "")
+		radius     = fs.Int("radius", domain.DefaultChrome().Radius, "")
+		configPath = fs.String("config", "", "")
 		out        = fs.String("out", "", "")
 		toStdout   = fs.Bool("stdout", false, "")
 		clip       = fs.Bool("clip", false, "")
@@ -385,6 +403,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 	chrome := domain.DefaultChrome()
 	chrome.Scale = *scale
 	chrome.PaddingX, chrome.PaddingY = *padding, *padding
+	chrome.Radius = *radius
 	chrome.Margin = *margin
 	if *noShadow && !named["margin"] {
 		// The margin exists to hold the blur, which spreads about forty
@@ -419,19 +438,68 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		chrome.Background = &c
 	}
 
+	// codeshot's own config comes next in design §4's precedence, under the
+	// flags and over Ghostty's. Every key is a flag name, so it is applied
+	// through the flag set itself: one definition of what a setting means,
+	// and a value that will not parse is rejected here exactly as it would
+	// be on the command line.
+	own, err := config.Load(*configPath)
+	if err != nil {
+		return options{}, nil, err
+	}
+	decided := map[string]bool{}
+	for name := range named {
+		decided[name] = true
+	}
+	known := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) { known[f.Name] = true })
+	for _, key := range own.Order {
+		if key == "config" || decided[key] || !known[key] {
+			continue
+		}
+		value := own.Values[key]
+		if isBoolFlag(fs.Lookup(key)) {
+			b, ok := own.Bool(key)
+			if !ok {
+				return options{}, nil, fmt.Errorf("%s: %s = %q is not a yes or a no", own.Path, key, value)
+			}
+			value = strconv.FormatBool(b)
+		}
+		if err := fs.Set(key, value); err != nil {
+			return options{}, nil, fmt.Errorf("%s: %s: %w", own.Path, key, err)
+		}
+		decided[key] = true
+	}
+
+	// The chrome was assembled from the flag values before the config had
+	// its say, so the settings the config may have changed are read again.
+	chrome.Scale = *scale
+	chrome.PaddingX, chrome.PaddingY = *padding, *padding
+	chrome.Radius = *radius
+	chrome.Margin = *margin
+	if *noShadow && !decided["margin"] {
+		chrome.Margin = 0
+	}
+	chrome.Shadow = !*noShadow
+	chrome.ShowTitle = !*noTitle
+	chrome.Title = *title
+	if *scale < 1 {
+		return options{}, nil, fmt.Errorf("--scale must be at least 1, got %d", *scale)
+	}
+
 	// Ghostty's config fills in what the caller did not name, which is what
 	// makes a shot look like the terminal it came from. Design §4's
 	// precedence, from strongest: flags, codeshot's own config, Ghostty's,
 	// built-in defaults. Anything Ghostty says that codeshot cannot make
 	// sense of was already dropped by the parser.
 	gh, _ := loadGhostty()
-	if !named["theme"] && gh.Theme != "" {
+	if !decided["theme"] && gh.Theme != "" {
 		*themeName = gh.Theme
 	}
-	if !named["font-size"] && gh.FontSize > 0 {
+	if !decided["font-size"] && gh.FontSize > 0 {
 		*fontSize = gh.FontSize
 	}
-	if !named["padding"] {
+	if !decided["padding"] {
 		if gh.PaddingX > 0 {
 			chrome.PaddingX = gh.PaddingX
 		}
@@ -440,24 +508,29 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		}
 	}
 
+	unknown := own.Unknown(known)
+
 	return options{
-		command:    *command,
-		cwd:        *cwd,
-		cols:       *cols,
-		rows:       *rows,
-		tail:       *tail,
-		noPrompt:   *noPrompt,
-		theme:      *themeName,
-		fontSize:   *fontSize,
-		lineHeight: *lineHeight,
-		gallery:    *galleryDir,
-		font:       *fontName,
-		fontFamily: gh.FontFamily,
-		out:        *out,
-		stdout:     *toStdout,
-		clip:       *clip,
-		debug:      *debug,
-		chrome:     chrome,
+		unknownConfigKeys: unknown,
+		configPath:        own.Path,
+		command:           *command,
+		cwd:               *cwd,
+		cols:              *cols,
+		rows:              *rows,
+		tail:              *tail,
+		noPrompt:          *noPrompt,
+		theme:             *themeName,
+		fontSize:          *fontSize,
+		lineHeight:        *lineHeight,
+		gallery:           *galleryDir,
+		font:              *fontName,
+		prompt:            *promptText,
+		fontFamily:        gh.FontFamily,
+		out:               *out,
+		stdout:            *toStdout,
+		clip:              *clip,
+		debug:             *debug,
+		chrome:            chrome,
 	}, positional, nil
 }
 
@@ -466,6 +539,9 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 // An error here is codeshot failing at its own job, not the caller mistyping,
 // and exits 1.
 func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.Gallery) (app.Service, error) {
+	for _, key := range o.unknownConfigKeys {
+		reporter.Warn(fmt.Sprintf("%s: no setting called %q", o.configPath, key))
+	}
 	set, err := o.fontSet(reporter)
 	if err != nil {
 		return app.Service{}, err
@@ -477,7 +553,7 @@ func (o options) build(src app.CaptureSource, reporter report.Writer, dest app.G
 	return app.Service{
 		Source:  src,
 		Emu:     emulator,
-		Prompt:  prompt.Template{},
+		Prompt:  prompt.Template{Text: o.prompt},
 		Themes:  themeSource(),
 		Render:  raster.New(set, raster.Options{FontSize: o.fontSize, LineHeight: o.lineHeight}),
 		Gallery: dest,
@@ -591,6 +667,16 @@ func (o options) request(name string) app.Request {
 // flag.FlagSet offers no direct query for. It is what lets one flag's default
 // depend on another without trampling a value the user set by hand: a
 // hardcoded default cannot tell "not set" from "set to the same number".
+// isBoolFlag reports whether a flag is one that takes no value, which is how
+// a config key gets `yes` and `on` translated into what flag.Set accepts.
+func isBoolFlag(f *flag.Flag) bool {
+	if f == nil {
+		return false
+	}
+	b, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return ok && b.IsBoolFlag()
+}
+
 func namedFlags(fs *flag.FlagSet) map[string]bool {
 	named := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { named[f.Name] = true })

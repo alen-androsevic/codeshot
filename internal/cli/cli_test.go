@@ -797,3 +797,164 @@ func TestPaddingXAndYAreSeparate(t *testing.T) {
 		t.Errorf("height %d, want the vertical padding untouched at %d", wide.Dy(), plain.Dy())
 	}
 }
+
+// writeConfig puts a codeshot config somewhere a test can point --config at.
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestConfigSuppliesDefaults(t *testing.T) {
+	cfg := writeConfig(t, "theme = codeshot-light\npadding = 40\n")
+	light, err := theme.Source{}.Theme("codeshot-light")
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := renderedImage(t, "--config", cfg, "--scale", "1")
+	if got := middle(img); !sameColor(got, color.RGBA{light.Background.R, light.Background.G, light.Background.B, 0xFF}) {
+		t.Errorf("background = %v, want the config's theme %v", got, light.Background)
+	}
+	plain := renderedImage(t, "--scale", "1").Bounds().Dx()
+	if want := plain + 2*(40-14); img.Bounds().Dx() != want {
+		t.Errorf("width = %d, want %d from the config's padding", img.Bounds().Dx(), want)
+	}
+}
+
+// TestPrecedenceIsFlagsThenConfigThenGhostty is design §4's order, checked
+// where all three disagree at once.
+func TestPrecedenceIsFlagsThenConfigThenGhostty(t *testing.T) {
+	// The baseline is measured before Ghostty is stubbed in, or it would
+	// already carry the padding this test is about to attribute to Ghostty.
+	plain := renderedImage(t, "--scale", "1").Bounds().Dx()
+
+	defer stubGhostty(ghostty.Config{Theme: "codeshot-dark", PaddingX: 30, PaddingY: 30})()
+	cfg := writeConfig(t, "theme = codeshot-light\n")
+
+	light, _ := theme.Source{}.Theme("codeshot-light")
+	dark, _ := theme.Source{}.Theme("codeshot-dark")
+
+	// The config beats Ghostty.
+	got := middle(renderedImage(t, "--config", cfg))
+	if !sameColor(got, color.RGBA{light.Background.R, light.Background.G, light.Background.B, 0xFF}) {
+		t.Errorf("background = %v, want codeshot's own config to beat Ghostty's", got)
+	}
+	// The flag beats the config.
+	got = middle(renderedImage(t, "--config", cfg, "--theme", "codeshot-dark"))
+	if !sameColor(got, color.RGBA{dark.Background.R, dark.Background.G, dark.Background.B, 0xFF}) {
+		t.Errorf("background = %v, want the flag to beat the config", got)
+	}
+	// Ghostty still supplies what neither of the others mentioned.
+	width := renderedImage(t, "--config", cfg, "--scale", "1").Bounds().Dx()
+	if want := plain + 2*(30-14); width != want {
+		t.Errorf("width = %d, want %d from Ghostty's padding", width, want)
+	}
+}
+
+// TestUnknownConfigKeyIsWarnedNotFatal: the file is codeshot's own, so a
+// typo is worth saying out loud - and not worth refusing to take a picture
+// over.
+func TestUnknownConfigKeyIsWarnedNotFatal(t *testing.T) {
+	cfg := writeConfig(t, "thme = codeshot-light\n")
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "shot.png", "--gallery", dir, "--config", cfg}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "thme") {
+		t.Errorf("stderr = %q, want the misspelled key named", stderr.String())
+	}
+}
+
+func TestConfigThatIsNotThereIsAUsageError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "--config", "/no/such/config"}, nil, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit %d, want a usage error for a --config that was named and is not there", code)
+	}
+}
+
+func TestConfigValueThatWillNotParseIsAUsageError(t *testing.T) {
+	cfg := writeConfig(t, "scale = enormous\n")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"render", writeANSI(t), "--config", cfg}, nil, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit %d, want a usage error", code)
+	}
+	if !strings.Contains(stderr.String(), "scale") {
+		t.Errorf("stderr = %q, want the offending key named", stderr.String())
+	}
+}
+
+// TestRadiusSquaresTheCorners covers --radius, which the Chrome field has
+// been carrying since phase 1 without a flag to reach it.
+func TestRadiusSquaresTheCorners(t *testing.T) {
+	tight := []string{"--scale", "1", "--no-shadow", "--margin", "0", "--controls", "none", "--no-title"}
+	rounded := renderedImage(t, append(tight, "--radius", "10")...)
+	square := renderedImage(t, append(tight, "--radius", "0")...)
+
+	if _, _, _, a := rounded.At(0, 0).RGBA(); a != 0 {
+		t.Errorf("top-left alpha = %d with --radius 10, want a rounded corner to leave it clear", a)
+	}
+	if _, _, _, a := square.At(0, 0).RGBA(); a == 0 {
+		t.Error("top-left is still clear with --radius 0, want a square corner filled")
+	}
+}
+
+func TestPromptFlagChangesThePromptLine(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	args := []string{"render", writeANSI(t), "shot.png", "--gallery", dir, "--command", "ls", "--prompt", "codeshot$ "}
+	if code := Run(args, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	withFlag, err := os.ReadFile(filepath.Join(dir, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"render", writeANSI(t), "shot.png", "--gallery", other, "--command", "ls"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	plain, err := os.ReadFile(filepath.Join(other, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(withFlag, plain) {
+		t.Error("--prompt drew the same picture as the default template")
+	}
+}
+
+// TestDoctorReportsWhatItFound checks doctor answers the questions it exists
+// for. HOME is moved aside because doctor probes the gallery by writing to it.
+func TestDoctorReportsWhatItFound(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"codeshot", "Config", "Themes", "Fonts", "Output", "Terminal", "gallery", "clipboard", "drawing with"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor said nothing about %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorNamesTheConfigItRead(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := writeConfig(t, "theme = codeshot-light\n")
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--config", cfg}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(stdout.String(), cfg) {
+		t.Errorf("doctor did not name the config it read:\n%s", stdout.String())
+	}
+}
