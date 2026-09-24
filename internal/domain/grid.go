@@ -17,6 +17,7 @@ type Cell struct {
 // background colour is not blank: terminals paint it, so codeshot must too.
 // Neither is a space carrying a combining mark - the renderer draws the mark,
 // and a cell the renderer would draw must never be one the domain discards.
+// Underline and strikethrough also leave marks on otherwise blank cells.
 func (c Cell) IsBlank() bool {
 	if c.Rune != 0 && c.Rune != ' ' {
 		return false
@@ -24,7 +25,11 @@ func (c Cell) IsBlank() bool {
 	if c.Combining != "" {
 		return false
 	}
-	return c.Style.BG.Kind == ColorDefault && !c.Style.Has(AttrInverse)
+	if c.Style.BG.Kind != ColorDefault {
+		return false
+	}
+	decorations := AttrInverse | AttrUnderline | AttrStrike
+	return !c.Style.Has(decorations)
 }
 
 // Grid is a rectangular block of cells: what an emulator produced, or a piece
@@ -36,18 +41,23 @@ type Grid struct {
 
 func (g Grid) Rows() int { return len(g.Lines) }
 
-// ContentCols returns the width of the widest line, i.e. how many columns
-// actually hold cells. It may be less than Cols (the terminal width) when
-// lines are shorter than the terminal. This does not trim trailing blanks —
-// a blank cell may still carry decoration (underline, background) that needs
-// to be drawn.
+// ContentCols returns the width of the widest line after trimming trailing
+// blank cells. A blank cell is one with no glyph, no combining marks, and no
+// visual decoration (background, inverse). This may be less than Cols when
+// lines have trailing whitespace.
 func (g Grid) ContentCols() int {
 	max := 0
 	for _, line := range g.Lines {
+		// Find the last non-blank cell.
+		end := len(line)
+		for end > 0 && line[end-1].IsBlank() {
+			end--
+		}
+		// Count column positions up to that point.
 		w := 0
-		for _, c := range line {
-			if c.Width > 0 {
-				w += int(c.Width)
+		for i := 0; i < end; i++ {
+			if line[i].Width > 0 {
+				w += int(line[i].Width)
 			}
 		}
 		if w > max {

@@ -80,7 +80,8 @@ func TestMinColsFloorsTheWidth(t *testing.T) {
 }
 
 func TestBackgroundFillsTheImage(t *testing.T) {
-	g := domain.Grid{Cols: 4, Lines: [][]domain.Cell{cells("    ", domain.Style{})}}
+	// Use actual content so ContentCols > 0 and the window is sized.
+	g := domain.Grid{Cols: 4, Lines: [][]domain.Cell{cells("test", domain.Style{})}}
 	img := render(t, bare(g, testTheme()))
 	if r, gg, b, a := img.At(1, 1).RGBA(); r != 0 || gg != 0 || b != 0 || a != 0xFFFF {
 		t.Errorf("pixel = %d,%d,%d,%d, want opaque black from the theme", r, gg, b, a)
