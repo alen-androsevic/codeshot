@@ -49,6 +49,8 @@ type Source struct {
 	Cwd string
 	// Cols fixes the pty's width. Zero follows the terminal behind Size.
 	Cols int
+	// MaxCols caps the width. Zero means no cap.
+	MaxCols int
 	// Stdin, when it is a terminal, is put into raw mode for the length of
 	// the run and forwarded to the child through the pty. Anything else is
 	// handed to the child as its stdin directly. Nil gives the child the pty
@@ -77,7 +79,7 @@ func (s Source) Capture() (domain.Capture, error) {
 		cwd, _ = os.Getwd()
 	}
 
-	size := &windowSize{fixedCols: s.Cols}
+	size := &windowSize{fixedCols: s.Cols, maxCols: s.MaxCols}
 	size.follow(s.Size)
 
 	// The resize handler is installed before the child starts, so a resize in
@@ -175,9 +177,11 @@ func (s Source) Capture() (domain.Capture, error) {
 // windowSize is the pty's size, read on start and again on every SIGWINCH.
 // An explicit width survives a resize: --cols asked for that width, and a
 // user dragging their window wider has not changed their mind about it.
+// maxCols caps the width regardless of source.
 type windowSize struct {
 	mu         sync.Mutex
 	fixedCols  int
+	maxCols    int
 	cols, rows int
 }
 
@@ -185,6 +189,9 @@ func (w *windowSize) follow(f *os.File) {
 	cols, rows := tty.Size(f)
 	if w.fixedCols > 0 {
 		cols = w.fixedCols
+	}
+	if w.maxCols > 0 && cols > w.maxCols {
+		cols = w.maxCols
 	}
 	w.mu.Lock()
 	w.cols, w.rows = cols, rows

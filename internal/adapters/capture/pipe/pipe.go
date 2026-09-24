@@ -33,6 +33,8 @@ type Source struct {
 	Cwd string
 	// Cols fixes the width. Zero follows the terminal behind Size.
 	Cols int
+	// MaxCols caps the width. Zero means no cap.
+	MaxCols int
 	// Stdout is where the input passes through on its way past, so that a
 	// pipeline still shows its output. Nil captures silently.
 	Stdout io.Writer
@@ -55,6 +57,9 @@ func (s Source) Capture() (domain.Capture, error) {
 	cols, rows := tty.Size(s.Size)
 	if s.Cols > 0 {
 		cols = s.Cols
+	}
+	if s.MaxCols > 0 && cols > s.MaxCols {
+		cols = s.MaxCols
 	}
 
 	captured := tap.New(s.Stdout)

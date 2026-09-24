@@ -82,6 +82,7 @@ Flags:
                        command that ran; render has none unless given)
   --cwd <path>         the directory to show in the prompt
   --cols <n>           terminal width (default: your terminal's, or 100)
+  --max-cols <n>       cap the width (default 132; 0 disables)
   --rows <n>           crop to this many lines (0 keeps them all)
   --tail               crop from the bottom instead of the top
   --no-prompt          leave out the prompt and command lines
@@ -193,6 +194,7 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 			Command: opts.command,
 			Cwd:     opts.cwd,
 			Cols:    opts.cols,
+			MaxCols: opts.maxCols,
 			Stdin:   stdin,
 			Stdout:  passthrough,
 			Size:    fileOf(stderr),
@@ -203,6 +205,7 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 			Command: opts.command,
 			Cwd:     opts.cwd,
 			Cols:    opts.cols,
+			MaxCols: opts.maxCols,
 			Stdout:  passthrough,
 			Size:    fileOf(stderr),
 		}
@@ -272,11 +275,15 @@ func render(args []string, stdout, stderr io.Writer) int {
 		return usageExit(stderr, err)
 	}
 	reporter := report.Writer{Err: stderr}
+	cols := opts.cols
+	if opts.maxCols > 0 && cols > opts.maxCols {
+		cols = opts.maxCols
+	}
 	service, err := opts.build(file.Source{
 		Path:    positional[0],
 		Command: opts.command,
 		Cwd:     opts.cwd,
-		Cols:    opts.cols,
+		Cols:    cols,
 		Warn:    reporter.Warn,
 	}, reporter, dest)
 	if err != nil {
@@ -329,6 +336,7 @@ type options struct {
 	command    string
 	cwd        string
 	cols       int
+	maxCols    int
 	rows       int
 	tail       bool
 	noPrompt   bool
@@ -367,7 +375,8 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		// falls back to 100 for a capture that never learned its width, and
 		// repeating that number here would leave wrapper mode - which sizes
 		// the pty from stderr - unable to tell "not set" from "set to 100".
-		cols       = fs.Int("cols", 0, "")
+		cols    = fs.Int("cols", 0, "")
+		maxCols = fs.Int("max-cols", 132, "")
 		rows       = fs.Int("rows", 0, "")
 		tail       = fs.Bool("tail", false, "")
 		noPrompt   = fs.Bool("no-prompt", false, "")
@@ -516,6 +525,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		command:           *command,
 		cwd:               *cwd,
 		cols:              *cols,
+		maxCols:           *maxCols,
 		rows:              *rows,
 		tail:              *tail,
 		noPrompt:          *noPrompt,
