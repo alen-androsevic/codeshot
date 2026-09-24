@@ -4,3 +4,4 @@ build/
 !docs/**/*.png
 !internal/**/testdata/*.png
 .superpowers/
+.DS_Store
