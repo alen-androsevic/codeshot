@@ -36,6 +36,27 @@ type Grid struct {
 
 func (g Grid) Rows() int { return len(g.Lines) }
 
+// ContentCols returns the width of the widest line, i.e. how many columns
+// actually hold cells. It may be less than Cols (the terminal width) when
+// lines are shorter than the terminal. This does not trim trailing blanks —
+// a blank cell may still carry decoration (underline, background) that needs
+// to be drawn.
+func (g Grid) ContentCols() int {
+	max := 0
+	for _, line := range g.Lines {
+		w := 0
+		for _, c := range line {
+			if c.Width > 0 {
+				w += int(c.Width)
+			}
+		}
+		if w > max {
+			max = w
+		}
+	}
+	return max
+}
+
 // TrimTrailingBlank drops empty lines from the bottom. A capture almost always
 // ends with the newline the program printed last, and that newline would
 // otherwise become an empty row at the foot of the image.

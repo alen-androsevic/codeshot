@@ -59,7 +59,18 @@ func (r Renderer) layout(w domain.Window) (layout, error) {
 	if w.Chrome.Controls != domain.ControlsNone || w.Chrome.ShowTitle {
 		l.titlebar = w.Chrome.TitlebarHeight * scale
 	}
-	l.cols = w.Frame.Grid.Cols
+	// Shrink the window to content width, but not below MinCols or above the
+	// terminal's own width. This keeps narrow outputs compact while still
+	// giving wide content room to breathe.
+	contentCols := w.Frame.Grid.ContentCols()
+	terminalCols := w.Frame.Grid.Cols
+	l.cols = contentCols
+	if w.Chrome.MinCols > 0 && l.cols < w.Chrome.MinCols {
+		l.cols = w.Chrome.MinCols
+	}
+	if l.cols > terminalCols {
+		l.cols = terminalCols
+	}
 	l.rows = w.Frame.Grid.Rows()
 	winW := l.cols*m.CellW + 2*l.paddingX
 	winH := l.rows*m.CellH + 2*l.paddingY + l.titlebar

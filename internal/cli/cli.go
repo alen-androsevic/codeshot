@@ -83,6 +83,7 @@ Flags:
   --cwd <path>         the directory to show in the prompt
   --cols <n>           terminal width (default: your terminal's, or 100)
   --max-cols <n>       cap the width (default 132; 0 disables)
+  --min-cols <n>       floor for content-fit width (default 132; 0 disables)
   --rows <n>           crop to this many lines (0 keeps them all)
   --tail               crop from the bottom instead of the top
   --no-prompt          leave out the prompt and command lines
@@ -377,6 +378,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		// the pty from stderr - unable to tell "not set" from "set to 100".
 		cols    = fs.Int("cols", 0, "")
 		maxCols = fs.Int("max-cols", 132, "")
+		minCols = fs.Int("min-cols", domain.DefaultChrome().MinCols, "")
 		rows       = fs.Int("rows", 0, "")
 		tail       = fs.Bool("tail", false, "")
 		noPrompt   = fs.Bool("no-prompt", false, "")
@@ -414,6 +416,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 	chrome.PaddingX, chrome.PaddingY = *padding, *padding
 	chrome.Radius = *radius
 	chrome.Margin = *margin
+	chrome.MinCols = *minCols
 	if *noShadow && !named["margin"] {
 		// The margin exists to hold the blur, which spreads about forty
 		// pixels and sits eighteen lower. With no shadow to hold there is
@@ -486,6 +489,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 	chrome.PaddingX, chrome.PaddingY = *padding, *padding
 	chrome.Radius = *radius
 	chrome.Margin = *margin
+	chrome.MinCols = *minCols
 	if *noShadow && !decided["margin"] {
 		chrome.Margin = 0
 	}

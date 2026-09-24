@@ -31,6 +31,9 @@ type Chrome struct {
 	// Background paints behind the margin. Nil leaves it transparent, which is
 	// what makes a shot drop cleanly onto any README.
 	Background *RGBA
+	// MinCols is the minimum window width in columns. The window shrinks to
+	// content width but never below this. Zero means no minimum.
+	MinCols int
 }
 
 func DefaultChrome() Chrome {
@@ -45,8 +48,9 @@ func DefaultChrome() Chrome {
 		// 64 rather than a rounder 48: the shadow spreads about forty pixels
 		// and sits eighteen lower, and a clipped shadow ends in a hard
 		// straight edge that reads as a rendering bug.
-		Margin: 64,
-		Scale:  2,
+		Margin:  64,
+		Scale:   2,
+		MinCols: 132,
 	}
 }
 

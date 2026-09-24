@@ -52,16 +52,30 @@ func render(t *testing.T, w domain.Window) *image.RGBA {
 	return img.(*image.RGBA)
 }
 
-func TestImageIsSizedFromTheGrid(t *testing.T) {
+func TestImageIsSizedFromContent(t *testing.T) {
 	set, _ := fonts.Embedded()
 	m, _ := set.Metrics(DefaultOptions().FontSize, DefaultOptions().LineHeight)
+	// With MinCols=0, the window shrinks to fit the content. "hi" is 2 cells.
 	g := domain.Grid{Cols: 10, Lines: [][]domain.Cell{cells("hi", domain.Style{})}}
 	img := render(t, bare(g, testTheme()))
-	if got, want := img.Bounds().Dx(), 10*m.CellW; got != want {
-		t.Errorf("width = %d, want %d", got, want)
+	if got, want := img.Bounds().Dx(), 2*m.CellW; got != want {
+		t.Errorf("width = %d, want %d (content width)", got, want)
 	}
 	if got, want := img.Bounds().Dy(), 1*m.CellH; got != want {
 		t.Errorf("height = %d, want %d", got, want)
+	}
+}
+
+func TestMinColsFloorsTheWidth(t *testing.T) {
+	set, _ := fonts.Embedded()
+	m, _ := set.Metrics(DefaultOptions().FontSize, DefaultOptions().LineHeight)
+	// "hi" is 2 cells, but MinCols=5 floors the width at 5 columns.
+	g := domain.Grid{Cols: 10, Lines: [][]domain.Cell{cells("hi", domain.Style{})}}
+	w := bare(g, testTheme())
+	w.Chrome.MinCols = 5
+	img := render(t, w)
+	if got, want := img.Bounds().Dx(), 5*m.CellW; got != want {
+		t.Errorf("width = %d, want %d (MinCols)", got, want)
 	}
 }
 
