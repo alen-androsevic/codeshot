@@ -50,7 +50,7 @@ func DefaultChrome() Chrome {
 		// straight edge that reads as a rendering bug.
 		Margin:  64,
 		Scale:   2,
-		MinCols: 132,
+		MinCols: 80,
 	}
 }
 

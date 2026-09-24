@@ -83,7 +83,7 @@ Flags:
   --cwd <path>         the directory to show in the prompt
   --cols <n>           terminal width (default: your terminal's, or 100)
   --max-cols <n>       cap the width (default 132; 0 disables)
-  --min-cols <n>       floor for content-fit width (default 132; 0 disables)
+  --min-cols <n>       floor for content-fit width (default 80; 0 disables)
   --rows <n>           crop to this many lines (0 keeps them all)
   --tail               crop from the bottom instead of the top
   --no-prompt          leave out the prompt and command lines
