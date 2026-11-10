@@ -93,8 +93,8 @@ Carried from the final review's triage. None block use; all are real.
 ## Known limitations to keep documenting
 
 - Colour emoji work on macOS only. Apple's sbix is the one bitmap format
-  codeshot reads; Linux's Noto Color Emoji uses CBDT/CBLC or COLR, and
-  Windows's Segoe UI Emoji is COLR, so emoji are tofu there.
+  codeshot reads; Linux's Noto Color Emoji uses CBDT/CBLC or COLR, so emoji
+  are tofu there.
 - Nerd Font icons need a Nerd Font installed on the machine. codeshot finds
   one by name shape and consults it for runes nothing else draws, so no
   `--font` is needed; but a terminal that compiles its own copy in - Ghostty

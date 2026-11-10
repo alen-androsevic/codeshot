@@ -127,7 +127,7 @@ That package is now `internal/cli` rather than `cmd/codeshot`.)*
 | `PromptSource` | template | `--prompt-command` (e.g. `starship prompt`) |
 | `Gallery` | filesystem | — |
 | `Clipboard` | `pbcopy` / `wl-copy` / `xclip` | — |
-| `Tty` | unix ioctl (size, isatty) | ConPTY / Windows |
+| `Tty` | unix ioctl (size, isatty) | — |
 
 *Amended during implementation:* `Clipboard` is not a port either, and for a
 different reason than `Tty`. A clipboard is not a second kind of thing
@@ -163,6 +163,11 @@ Only four things are per-OS, one file each behind a build tag: **pty creation**,
 deliberately *not* an OS branch — it is a domain option, so a Linux machine can
 render macOS traffic lights and vice versa. Porting to another OS is those four
 files plus, optionally, a new chrome preset.
+
+*Amended after 0.1.0:* codeshot runs on macOS and Linux only. Windows had a
+font-directory and a clipboard file but never a pty, so it did not build, and
+those files are gone rather than kept for a port nobody is doing. A Windows
+port would start with ConPTY.
 
 ### Dependencies
 

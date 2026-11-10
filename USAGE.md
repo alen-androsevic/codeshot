@@ -165,8 +165,8 @@ codeshot doctor                          # what is installed, and what a shot wo
 A rune your font has no glyph for is drawn by something that does, so `中文`
 and `→` arrive even from a font that never heard of them. On macOS colour
 emoji are decoded out of Apple Color Emoji and composited in, so `🎉` is a
-picture rather than a box; on Linux and Windows emoji are still tofu, because
-those platforms' emoji fonts use formats codeshot does not read yet.
+picture rather than a box; on Linux emoji are still tofu, because its emoji
+fonts use formats codeshot does not read yet.
 
 ### Your own defaults
 
@@ -214,7 +214,7 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | `--stdout` printed junk in my terminal | That's the PNG. Redirect it: `codeshot --stdout -- cmd > shot.png` |
 | `render`: lines march right across the image | The dump didn't go through a pty; use `codeshot -- cmd` instead |
 | `no background or foreground colour` | You pointed `--theme` at a Ghostty *config*, not a theme file |
-| Emoji are boxes on Linux or Windows | Only Apple's sbix format is read so far; on macOS they render in colour |
+| Emoji are boxes on Linux | Only Apple's sbix format is read so far; on macOS they render in colour |
 | Nerd Font icons are boxes | Install one — `brew install --cask font-symbols-only-nerd-font` — and codeshot finds it for the icons on its own. Your terminal's own copy is compiled into the terminal, where codeshot cannot reach it |
 | `codeshot -- ll` says command not found | An alias is invisible to any child process. Source a shim and codeshot expands it |
 | A piped `ls`/`eza` lost its colour *and* its icons | A pipe is not a terminal, so the tool turned both off. `--color=always --icons=always`, or use the wrapper |
