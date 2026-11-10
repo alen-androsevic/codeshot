@@ -4,16 +4,21 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime/debug"
 	"strconv"
+	"strings"
 
 	"codeshot/internal/adapters/capture/file"
 	"codeshot/internal/adapters/capture/pipe"
+	"codeshot/internal/adapters/capture/plain"
 	"codeshot/internal/adapters/capture/pty"
 	"codeshot/internal/adapters/clipboard"
 	"codeshot/internal/adapters/config"
@@ -28,6 +33,7 @@ import (
 	"codeshot/internal/adapters/vt"
 	"codeshot/internal/app"
 	"codeshot/internal/domain"
+	"codeshot/internal/home"
 )
 
 // Version is stamped at build time by install.sh; it is only ever printed.
@@ -55,19 +61,27 @@ var loadFontIndex = func() fonts.Index {
 // they had set that day.
 var loadGhostty = ghostty.Load
 
-const usage = `codeshot - a picture of a command and what it printed
+const usage = `codeshot - a shot of a command and what it printed
+
+Examples:
+  codeshot -- git status                    ~/Codeshots/git-status.png
+  codeshot shot.png -- npm test             ~/Codeshots/shot.png
+  codeshot ./shot.png -- npm test           a path, used as given
+  codeshot --clip -- ls -la                 to the clipboard, no file
+  npm test 2>&1 | codeshot --command "npm test"
 
 Usage:
-  codeshot [name] [flags] -- <command> [args...]   run a command and picture it
-  <command> | codeshot [name] [flags]              picture what comes in
-  codeshot render <file.ansi> [name] [flags]       render a saved ANSI dump
-  codeshot themes                                  list the themes that resolve
-  codeshot doctor                                  report what codeshot found here
+  codeshot [name] [flags] -- <command> [args...]   run a command, take a shot
+  <command> | codeshot [name] [flags]              take a shot of what comes in
+  codeshot render <file.ansi> [name] [flags]       take a shot of a saved dump
+  codeshot themes [--json]                         list the themes that resolve
+  codeshot doctor [--json]                         show what codeshot found
   codeshot version
 
 With no name, the shot is named after the command (ls -la -> ls-la.png) and
-stored in the gallery. A name with a / in it is a path. Everything after --
-belongs to the command. codeshot exits with the command's own status.
+stored in the gallery. A name with a / in it is a path. A file already there
+goes to the Trash first. Everything after -- belongs to the command, and
+codeshot exits with the command's own status.
 
 A pipe is not a terminal, so a command on the left of one has already
 dropped its colour before codeshot sees a byte, and codeshot cannot know what
@@ -75,35 +89,41 @@ that command was. The wrapper has neither problem and is the better half;
 shim/codeshot.zsh and shim/codeshot.bash recover the command line for a pipe.
 
 Flags:
-  --out <name>         where the picture goes; the same as [name]
+  --out <name>         where the shot goes; the same as [name]
   --stdout             write the PNG to standard output, output to stderr
-  --clip               copy the picture to the clipboard, writing no file
-  --command <text>     the command line shown after the prompt (default: the
-                       command that ran; render has none unless given)
-  --cwd <path>         the directory to show in the prompt
+  --clip               copy the shot to the clipboard, writing no file
+  --command <text>     the command line after the prompt (default: the one
+                       that ran; render has none unless given)
+  --cwd <path>         the directory in the prompt (default: the current one)
   --cols <n>           terminal width (default: your terminal's, or 100)
   --max-cols <n>       cap the width (default 132; 0 disables)
   --min-cols <n>       floor for content-fit width (default 80; 0 disables)
-  --rows <n>           crop to this many lines (0 keeps them all)
+  --rows <n>           crop to this many lines (default 0, keeps them all)
   --tail               crop from the bottom instead of the top
   --no-prompt          leave out the prompt and command lines
-  --theme <name|path>  codeshot-dark, codeshot-light, or a Ghostty theme file
+  --theme <name|path>  a name codeshot themes lists, or a Ghostty theme file
+                       (default: Ghostty's theme, else codeshot-dark)
   --title <text>       window title (default: the command)
   --no-title           draw no title
   --controls <style>   macos, linux or none (default macos)
   --scale <n>          pixel scale, at least 1 (default 2)
-  --padding <n>        pixels around the grid (default 14)
+  --padding <n>        pixels around the grid (default: Ghostty's, else 14)
   --margin <n>         pixels around the window (default 64, 0 with --no-shadow)
   --no-shadow          drop the drop shadow
-  --background <hex>   fill the margin instead of leaving it transparent
-  --font <family>      a font family installed here (codeshot doctor lists them)
-  --prompt <text>      the prompt template; {cwd} is the directory
-  --radius <n>         corner radius (default 10)
-  --config <path>      read defaults from here instead of the usual place
-  --font-size <n>      points (default 13)
+  --background <hex>   fill the margin (default: transparent)
+  --radius <n>         corner radius in pixels (default 10)
+  --font <family>      a family codeshot doctor lists (default: Ghostty's
+                       font-family, else the embedded JetBrains Mono NL)
+  --font-size <n>      points (default: Ghostty's, else 13)
   --line-height <f>    multiple of the font's own height (default 1.0)
+  --prompt <text>      the prompt; {cwd} is the directory (default: {cwd} in
+                       cyan, then a green ❯ on the next line)
+  --config <path>      the defaults file (default ~/.config/codeshot/config)
   --gallery <dir>      where bare names are stored (default ~/Codeshots)
   --debug              report every escape sequence the emulator ignored
+
+Flags win over ~/.config/codeshot/config, which wins over Ghostty's config,
+which wins over the defaults above. Every flag is also a key in that file.
 `
 
 // Run is codeshot from argv to exit code. stdin is an *os.File rather than an
@@ -119,17 +139,10 @@ func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	case "version", "--version":
-		fmt.Fprintf(stdout, "codeshot %s\n", Version)
+		fmt.Fprintf(stdout, "codeshot %s\n", version())
 		return 0
 	case "themes":
-		// Asking the source rather than naming the two embedded themes here:
-		// with a Ghostty installation's directories in the list this prints
-		// the several hundred that actually resolve, and it cannot go stale
-		// the way a hardcoded pair does.
-		for _, name := range themeSource().Installed() {
-			fmt.Fprintln(stdout, name)
-		}
-		return 0
+		return themes(args[1:], stdout, stderr)
 	case "doctor":
 		return doctor(args[1:], stdout, stderr)
 	case "render":
@@ -153,7 +166,7 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if found && len(argv) == 0 {
-		fmt.Fprint(stderr, "codeshot: nothing after --; the command to run goes there\n")
+		fmt.Fprint(stderr, "codeshot: put the command to run after --\n")
 		return 2
 	}
 	// Pipe mode is exactly the case where standard input is not a terminal.
@@ -161,7 +174,7 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	// expecting a command.
 	piped := stdin != nil && !tty.IsTerminal(stdin)
 	if !found && !piped {
-		fmt.Fprint(stderr, "codeshot: nothing to picture; put a command after --, as in "+
+		fmt.Fprint(stderr, "codeshot: put a command after --, as in "+
 			"`codeshot [name] -- ls -la`, or pipe a command's output in\n")
 		return 2
 	}
@@ -177,7 +190,8 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if len(positional) == 1 {
 		name = positional[0]
 	}
-	dest, name, err := opts.output(name, stdout)
+	reporter := report.Writer{Err: stderr}
+	dest, name, err := opts.output(name, stdout, reporter)
 	if err != nil {
 		return usageExit(stderr, err)
 	}
@@ -186,6 +200,15 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	passthrough := stdout
 	if opts.stdout {
 		passthrough = stderr
+	}
+	// The child's colour and the pty's \r\n are there because codeshot gave
+	// it a terminal. A passthrough that is not one gets what the command
+	// would have written without codeshot in front of it. A pipe's input is
+	// already that, so pipe mode passes it on untouched.
+	var flat *plain.Writer
+	if f := fileOf(passthrough); found && (f == nil || !tty.IsTerminal(f)) {
+		flat = &plain.Writer{W: passthrough}
+		passthrough = flat
 	}
 
 	var source app.CaptureSource
@@ -212,7 +235,6 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		}
 	}
 
-	reporter := report.Writer{Err: stderr}
 	// Everything that can fail before the command runs fails here, while
 	// failing still costs nothing: no command has been run for nothing.
 	service, err := opts.build(source, reporter, dest)
@@ -221,6 +243,14 @@ func capture(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return 1
 	}
 	out, err := service.Run(opts.request(name))
+	if flat != nil {
+		flat.Flush()
+	}
+	if errors.Is(err, pipe.ErrNothing) {
+		fmt.Fprint(stderr, "codeshot: put a command after --, as in `codeshot [name] -- ls -la`, "+
+			"or pipe one in with --command; standard input was empty, so there is nothing to picture\n")
+		return 2
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "codeshot: %v\n", err)
 		// The command's failure outranks codeshot's. Design §10 says both
@@ -271,11 +301,11 @@ func render(args []string, stdout, stderr io.Writer) int {
 	if len(positional) > 1 {
 		name = positional[1]
 	}
-	dest, name, err := opts.output(name, stdout)
+	reporter := report.Writer{Err: stderr}
+	dest, name, err := opts.output(name, stdout, reporter)
 	if err != nil {
 		return usageExit(stderr, err)
 	}
-	reporter := report.Writer{Err: stderr}
 	cols := opts.cols
 	if opts.maxCols > 0 && cols > opts.maxCols {
 		cols = opts.maxCols
@@ -298,6 +328,85 @@ func render(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// themes lists the theme names that resolve here. Asking the source rather
+// than naming the two embedded themes: with a Ghostty installation's
+// directories in the list this prints the several hundred that actually
+// resolve, and it cannot go stale the way a hardcoded pair does.
+func themes(args []string, stdout, stderr io.Writer) int {
+	asJSON := false
+	for _, a := range args {
+		switch a {
+		case "-h", "--help", "help":
+			fmt.Fprint(stdout, usage)
+			return 0
+		case "--json", "-json":
+			asJSON = true
+		default:
+			fmt.Fprintf(stderr, "codeshot: themes takes only --json; %s is not one of its flags\n", a)
+			return 2
+		}
+	}
+	names := themeSource().Installed()
+	if asJSON {
+		return writeJSON(stdout, stderr, names)
+	}
+	for _, name := range names {
+		fmt.Fprintln(stdout, name)
+	}
+	return 0
+}
+
+// writeJSON is the --json output of themes and doctor: indented, so that a
+// person can read it too, and ending in a newline.
+func writeJSON(stdout, stderr io.Writer, v any) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintf(stderr, "codeshot: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// version is what install.sh stamped in, or else what the Go toolchain
+// recorded: the module version for `go install ...@v1.2.0`, the commit for a
+// plain `go build` in a checkout.
+func version() string {
+	if Version != "dev" {
+		return Version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return Version
+	}
+	// A pseudo-version, v0.0.0-20260924162053-11e18db50c5e+dirty, is what Go
+	// stamps on a plain build in a checkout; the commit says the same in less.
+	if v := info.Main.Version; v != "" && v != "(devel)" && !pseudoVersion.MatchString(v) {
+		return v
+	}
+	rev, dirty := "", false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return Version
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return "dev-" + rev
+}
+
+var pseudoVersion = regexp.MustCompile(`-(0\.)?\d{14}-[0-9a-f]{12}`)
+
 // wantsHelp reports whether the caller asked for the usage block, stopping at
 // a --. Help is intercepted before flag.FlagSet ever sees it: left to the
 // FlagSet, ContinueOnError returns ErrHelp only *after* printing its own dump
@@ -310,23 +419,47 @@ func wantsHelp(args []string) bool {
 		if a == "--" {
 			return false
 		}
-		if a == "-h" || a == "--help" || a == "help" {
+		if a == "-h" || a == "-help" || a == "--help" || a == "help" {
 			return true
 		}
 	}
 	return false
 }
 
-// errReported stands for a failure the flag package has already written to
-// stderr. Printing "codeshot: <it>" afterwards would say the same thing
-// twice.
-var errReported = errors.New("reported")
-
 func usageExit(stderr io.Writer, err error) int {
-	if !errors.Is(err, errReported) {
-		fmt.Fprintf(stderr, "codeshot: %v\n", err)
-	}
+	fmt.Fprintf(stderr, "codeshot: %v\n", err)
 	return 2
+}
+
+// flagError says what the flag package found wrong in codeshot's own words.
+// Left to itself it prints "flag provided but not defined: -nope" and then a
+// dump of every flag with a single dash and an empty description, none of
+// which says what to type instead.
+var invalidValue = regexp.MustCompile(`^invalid (?:boolean )?value "(.*)" for flag -([^:]+): `)
+
+func flagError(fs *flag.FlagSet, err error) error {
+	msg := err.Error()
+	if name, ok := strings.CutPrefix(msg, "flag provided but not defined: -"); ok {
+		return fmt.Errorf("--%s is not a flag; `codeshot --help` lists them", strings.TrimPrefix(name, "-"))
+	}
+	if name, ok := strings.CutPrefix(msg, "flag needs an argument: -"); ok {
+		return fmt.Errorf("put a value after --%s; `codeshot --help` says what it takes", strings.TrimPrefix(name, "-"))
+	}
+	if m := invalidValue.FindStringSubmatch(msg); m != nil {
+		want := "a value it takes"
+		if f := fs.Lookup(m[2]); f != nil {
+			switch f.Value.(flag.Getter).Get().(type) {
+			case int:
+				want = "a whole number"
+			case float64:
+				want = "a number"
+			case bool:
+				want = "true or false"
+			}
+		}
+		return fmt.Errorf("give --%s %s; %q is not one", m[2], want, m[1])
+	}
+	return err
 }
 
 // options is every flag, parsed and validated. It exists so that the two
@@ -368,7 +501,7 @@ type options struct {
 // error it returns is a mistake in what the caller typed, and exits 2.
 func parse(mode string, args []string, stderr io.Writer) (options, []string, error) {
 	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	var (
 		command = fs.String("command", "", "")
 		cwd     = fs.String("cwd", "", "")
@@ -376,9 +509,9 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 		// falls back to 100 for a capture that never learned its width, and
 		// repeating that number here would leave wrapper mode - which sizes
 		// the pty from stderr - unable to tell "not set" from "set to 100".
-		cols    = fs.Int("cols", 0, "")
-		maxCols = fs.Int("max-cols", 132, "")
-		minCols = fs.Int("min-cols", domain.DefaultChrome().MinCols, "")
+		cols       = fs.Int("cols", 0, "")
+		maxCols    = fs.Int("max-cols", 132, "")
+		minCols    = fs.Int("min-cols", domain.DefaultChrome().MinCols, "")
 		rows       = fs.Int("rows", 0, "")
 		tail       = fs.Bool("tail", false, "")
 		noPrompt   = fs.Bool("no-prompt", false, "")
@@ -407,7 +540,7 @@ func parse(mode string, args []string, stderr io.Writer) (options, []string, err
 	// do on its own, so the positionals are lifted out first.
 	positional, flags := split(args)
 	if err := fs.Parse(flags); err != nil {
-		return options{}, nil, errReported
+		return options{}, nil, flagError(fs, err)
 	}
 	named := namedFlags(fs)
 
@@ -601,9 +734,9 @@ func (o options) fontSet(reporter report.Writer) (*fonts.Set, error) {
 	family, ok := index.Lookup(name)
 	if !ok {
 		if o.font != "" {
-			return nil, fmt.Errorf("no font family called %q is installed; `codeshot doctor` lists what is", name)
+			return nil, fmt.Errorf("pick a font family `codeshot doctor` lists; %q is not installed", name)
 		}
-		reporter.Warn(fmt.Sprintf("Ghostty's font-family is %q, which is not installed here; using the embedded font", name))
+		reporter.Warn(fmt.Sprintf("drawing with the embedded font: Ghostty's font-family %q is not installed here", name))
 		set, err := fonts.Embedded()
 		if err != nil {
 			return nil, err
@@ -615,7 +748,7 @@ func (o options) fontSet(reporter report.Writer) (*fonts.Set, error) {
 		if o.font != "" {
 			return nil, err
 		}
-		reporter.Warn(fmt.Sprintf("%v; using the embedded font", err))
+		reporter.Warn(fmt.Sprintf("drawing with the embedded font: %v", err))
 		set, err := fonts.Embedded()
 		if err != nil {
 			return nil, err
@@ -638,7 +771,7 @@ func themeSource() theme.Source {
 // --clip and --stdout each replace the file entirely, so a name alongside
 // either has nothing to name: all three combinations are mistakes worth
 // stopping for rather than precedence rules to remember.
-func (o options) output(name string, stdout io.Writer) (app.Gallery, string, error) {
+func (o options) output(name string, stdout io.Writer, reporter report.Writer) (app.Gallery, string, error) {
 	if o.out != "" {
 		if name != "" {
 			return nil, "", fmt.Errorf("--out %s and the name %s say the same thing; use one", o.out, name)
@@ -664,7 +797,9 @@ func (o options) output(name string, stdout io.Writer) (app.Gallery, string, err
 		}
 		return gallery.Clip{Copy: clipboardCopy}, name, nil
 	}
-	return gallery.FS{Dir: o.gallery}, name, nil
+	return gallery.FS{Dir: o.gallery, Replaced: func(path, trashed string) {
+		reporter.Warn(fmt.Sprintf("moved the old %s to %s", home.Tildify(path), home.Tildify(trashed)))
+	}}, name, nil
 }
 
 func (o options) request(name string) app.Request {

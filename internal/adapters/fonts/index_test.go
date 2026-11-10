@@ -82,6 +82,20 @@ func TestLookupIgnoresCaseAndSpace(t *testing.T) {
 	}
 }
 
+// TestLookupTakesAFullFaceName: Ghostty's `font-family = Menlo Regular`
+// works in Ghostty, so it has to find Menlo here.
+func TestLookupTakesAFullFaceName(t *testing.T) {
+	idx := ScanDirs([]string{fixture(t)})
+	for _, name := range []string{"JetBrains Mono NL Regular", "JetBrains Mono NL Bold Italic"} {
+		if f, ok := idx.Lookup(name); !ok || f.Name != "JetBrains Mono NL" {
+			t.Errorf("Lookup(%q) = %q, %v; want the family", name, f.Name, ok)
+		}
+	}
+	if _, ok := idx.Lookup("Regular"); ok {
+		t.Error("a style word alone found a family")
+	}
+}
+
 // TestScanDirsReadsCollections covers the .ttc case, where one file holds
 // several fonts and the index has to say which. Menlo is macOS's, and ships
 // all four cuts in one file.

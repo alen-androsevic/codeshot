@@ -13,7 +13,7 @@ issue, or a chat message.
 ```
 ❯ codeshot danas-usage-example.png -- paradajz danas
 … paradajz's output, live, in colour, exactly as if you had run it bare …
-Stored codeshot in ~/Codeshots/danas-usage-example.png
+Stored the shot in ~/Codeshots/danas-usage-example.png
 ```
 
 ## 2. Constraints
@@ -200,8 +200,10 @@ the user watches it run normally, and tee into an in-memory buffer. Forward
 `SIGWINCH`; propagate the child's exit code as codeshot's own. The command text
 comes from argv, so the rendered line is exactly `❯ paradajz danas`.
 
-The wrapper is transparent: passthrough on stdout, the "Stored codeshot in …"
-line on stderr.
+The wrapper is transparent: passthrough on stdout, the "Stored the shot in …"
+line on stderr. *Amended after the MIG review:* a passthrough that is not a
+terminal has its escape sequences and the pty's `\r\n` taken out, so
+`codeshot -- ls -G > out.txt` holds what `ls -G > out.txt` would.
 
 *Amended during implementation:*
 
@@ -403,7 +405,11 @@ clipboard and nowhere else — so a name alongside `--clip` or `--stdout` is a
 usage error too, as is asking for both destinations at once. `--force` was
 dropped: it existed to unlock overwriting an existing file, and an explicit
 name still overwrites, so it would guard nothing. Generated names step
-around what is already there, as they always did.
+around what is already there, as they always did. *Amended after the MIG
+review:* overwriting moves the old file to the Trash first (`~/.Trash`, or the
+freedesktop.org trash), and says where it went; replacing a shot can be
+undone, and codeshot still never asks. Where there is no trash to reach, the
+old file stays and the new shot is not stored.
 
 ## 10. Errors and exit codes
 
@@ -425,7 +431,10 @@ for one that exists but may not be run. No image is made: a picture of a
 command that never started would be a picture of nothing. A child killed by
 signal N exits 128+N, as a shell reports it.
 Empty capture (no output at all): still a valid image — prompt and command line
-only.
+only. *Amended after the MIG review:* except an empty pipe with no command
+known, which would be a blank window. That is far more often `codeshot
+tehmes` in a script, where standard input is not a terminal, than a picture
+anyone wants, so it exits 2 and stores nothing.
 
 ## 11. Testing
 

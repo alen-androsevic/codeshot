@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
@@ -37,7 +38,7 @@ func TestRenderWritesAShot(t *testing.T) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("no image written: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "Stored codeshot in") {
+	if !strings.Contains(stderr.String(), "Stored the shot in") {
 		t.Errorf("stderr = %q, want the stored line", stderr.String())
 	}
 }
@@ -326,13 +327,15 @@ func TestWrapperTakesAPictureOfTheCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
-	if stdout != "hello\r\n" {
+	// stdout here is a buffer, not a terminal, so it gets what echo would
+	// have written to a file: the pty's \r\n goes back to \n.
+	if stdout != "hello\n" {
 		t.Errorf("stdout = %q, want the command's output passed through", stdout)
 	}
 	if got := shots(t, dir); len(got) != 1 || got[0] != "echo-hello.png" {
 		t.Errorf("gallery = %v, want the shot named after the command", got)
 	}
-	if !strings.Contains(stderr, "Stored codeshot in") {
+	if !strings.Contains(stderr, "Stored the shot in") {
 		t.Errorf("stderr = %q, want the stored line there and not on stdout", stderr)
 	}
 }
@@ -355,7 +358,7 @@ func TestWrapperLeavesTheCommandsArgumentsAlone(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
-	if stdout != "-la --help --gallery\r\n" {
+	if stdout != "-la --help --gallery\n" {
 		t.Errorf("stdout = %q, want echo to have received its own arguments", stdout)
 	}
 }
@@ -365,7 +368,7 @@ func TestWrapperFlagsReachThePty(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
-	if stdout != "24 40\r\n" {
+	if stdout != "24 40\n" {
 		t.Errorf("stty size = %q, want --cols to have sized the pty", stdout)
 	}
 }
@@ -527,8 +530,20 @@ func TestPipeWithoutACommandStillWorks(t *testing.T) {
 	}
 }
 
-func TestPipeOfNothingIsStillAPicture(t *testing.T) {
+// TestPipeOfNothingFromNobodyIsAMistake: `codeshot tehmes` in a script reads
+// an empty standard input, and must not leave tehmes.png behind and exit 0.
+func TestPipeOfNothingFromNobodyIsAMistake(t *testing.T) {
 	code, dir, _, stderr := runPiped(t, "")
+	if code != 2 {
+		t.Errorf("exit %d, want 2; stderr: %s", code, stderr)
+	}
+	if got := shots(t, dir); len(got) != 0 {
+		t.Errorf("gallery = %v, want nothing", got)
+	}
+}
+
+func TestPipeOfNothingIsStillAPicture(t *testing.T) {
+	code, dir, _, stderr := runPiped(t, "", "--command", "grep x file")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
@@ -589,7 +604,7 @@ func TestStdoutWritesThePNGToStdout(t *testing.T) {
 	if !strings.Contains(stderr.String(), "hi") {
 		t.Errorf("stderr = %q, want the passthrough moved here", stderr.String())
 	}
-	if strings.Contains(stderr.String(), "Stored codeshot") {
+	if strings.Contains(stderr.String(), "Stored the shot") {
 		t.Errorf("stderr = %q, want no stored line when there is no file", stderr.String())
 	}
 }
@@ -956,5 +971,117 @@ func TestDoctorNamesTheConfigItRead(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), cfg) {
 		t.Errorf("doctor did not name the config it read:\n%s", stdout.String())
+	}
+}
+
+// TestWrapperStripsColourFromARedirectedStdout: `codeshot -- ls -G > out.txt`
+// must hold what `ls -G > out.txt` would, not the colour the pty coaxed out.
+func TestWrapperStripsColourFromARedirectedStdout(t *testing.T) {
+	code, _, stdout, stderr := runWrapped(t, "--", "printf", `\033[34mblue\033[0m\n`)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if stdout != "blue\n" {
+		t.Errorf("stdout = %q, want no escape codes and no \\r", stdout)
+	}
+}
+
+// TestNamingAnExistingShotTrashesIt: the old shot can be put back, and the
+// run says where it went.
+func TestNamingAnExistingShotTrashesIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	dir := t.TempDir()
+	run := func() string {
+		var out, errb bytes.Buffer
+		if code := Run([]string{"--gallery", dir, "shot.png", "--", "true"}, nil, &out, &errb); code != 0 {
+			t.Fatalf("exit %d, stderr: %s", code, errb.String())
+		}
+		return errb.String()
+	}
+	run()
+	stderr := run()
+	if !strings.Contains(stderr, "moved the old") || !strings.Contains(stderr, "shot.png to ~/") {
+		t.Errorf("stderr = %q, want it to say where the old shot went", stderr)
+	}
+	var trashed []string
+	filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Name() == "shot.png" {
+			trashed = append(trashed, p)
+		}
+		return nil
+	})
+	if len(trashed) != 1 {
+		t.Errorf("found %v under HOME, want the old shot in the trash", trashed)
+	}
+}
+
+// TestDoctorJSONIsAStableShape: --json is for scripts and agents, so the
+// lists are lists even when empty, and the keys a caller reads are there.
+func TestDoctorJSONIsAStableShape(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	var got struct {
+		Version string                    `json:"version"`
+		Fonts   map[string]any            `json:"fonts"`
+		Output  map[string]any            `json:"output"`
+		Config  map[string]map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Version == "" {
+		t.Error("no version")
+	}
+	if _, ok := got.Fonts["symbols"].([]any); !ok {
+		t.Errorf("fonts.symbols = %v, want a list", got.Fonts["symbols"])
+	}
+	if _, ok := got.Output["gallery"].(string); !ok {
+		t.Errorf("output.gallery = %v, want a path", got.Output["gallery"])
+	}
+	if _, ok := got.Config["codeshot"]["keys"].([]any); !ok {
+		t.Errorf("config.codeshot.keys = %v, want a list", got.Config["codeshot"]["keys"])
+	}
+}
+
+func TestThemesJSONIsAList(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"themes", "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	var names []string
+	if err := json.Unmarshal(stdout.Bytes(), &names); err != nil || len(names) < 2 {
+		t.Errorf("names = %v, %v; want at least the embedded two", names, err)
+	}
+}
+
+func TestSubcommandsAnswerHelp(t *testing.T) {
+	for _, sub := range []string{"themes", "doctor", "render"} {
+		var stdout, stderr bytes.Buffer
+		if code := Run([]string{sub, "--help"}, nil, &stdout, &stderr); code != 0 || !strings.HasPrefix(stdout.String(), "codeshot - ") {
+			t.Errorf("%s --help: exit %d, stdout starts %.40q", sub, code, stdout.String())
+		}
+	}
+}
+
+// TestFlagMistakesSayWhatToType: the flag package's own report is a dump of
+// every flag with a single dash and no description.
+func TestFlagMistakesSayWhatToType(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--nope", "--", "true"}, "codeshot: --nope is not a flag; `codeshot --help` lists them\n"},
+		{[]string{"--cols", "wide", "--", "true"}, "codeshot: give --cols a whole number; \"wide\" is not one\n"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(append([]string{"--gallery", t.TempDir()}, tc.args...), nil, &stdout, &stderr)
+		if code != 2 || stderr.String() != tc.want {
+			t.Errorf("%v: exit %d, stderr %q; want 2, %q", tc.args, code, stderr.String(), tc.want)
+		}
 	}
 }

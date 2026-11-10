@@ -34,5 +34,8 @@ func (t *Tap) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Len is how many bytes went past.
+func (t *Tap) Len() int { return t.buf.Len() }
+
 // Bytes is everything that went past.
 func (t *Tap) Bytes() []byte { return t.buf.Bytes() }

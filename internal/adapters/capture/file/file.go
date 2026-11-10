@@ -4,7 +4,9 @@ package file
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"codeshot/internal/domain"
@@ -25,6 +27,15 @@ type Source struct {
 func (s Source) Capture() (domain.Capture, error) {
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
+		// The *PathError already names the file, so it is unwrapped rather
+		// than repeated: "reading x: open x: no such file or directory".
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return domain.Capture{}, fmt.Errorf("check the path: %s does not exist", s.Path)
+		}
 		return domain.Capture{}, fmt.Errorf("reading %s: %w", s.Path, err)
 	}
 	s.warnAboutMissingCarriageReturns(data)

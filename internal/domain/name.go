@@ -37,8 +37,8 @@ func Slug(command string) string {
 }
 
 // ResolveName decides what the file is called. An explicit name is honoured
-// exactly, collision or not - overwriting is the caller's decision, made with
-// --force. A generated name steps aside for whatever is already there.
+// exactly, collision or not - the gallery moves whatever it replaces to the
+// trash. A generated name steps aside for whatever is already there.
 func ResolveName(raw, command string, exists func(string) bool) string {
 	if raw != "" {
 		return withPNG(raw)

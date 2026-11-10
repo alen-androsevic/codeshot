@@ -66,9 +66,32 @@ func CachePath() string {
 // Lookup finds a family by name, ignoring case and surrounding space, so
 // that --font "jetbrains mono nl" and a Ghostty config's `font-family =
 // JetBrains Mono NL` reach the same place.
+//
+// A name with a style on the end, `Menlo Regular` or `Fira Code Medium`,
+// finds its family too. Ghostty matches the full name of a face, so a config
+// that works in Ghostty says that often, and the family is what codeshot
+// draws with: it picks the cut per cell, from the bold and italic it is given.
 func (i Index) Lookup(name string) (Family, bool) {
-	f, ok := i.Families[key(name)]
-	return f, ok
+	k := key(name)
+	if f, ok := i.Families[k]; ok {
+		return f, true
+	}
+	words := strings.Fields(k)
+	for len(words) > 1 && styleWords[words[len(words)-1]] {
+		words = words[:len(words)-1]
+		if f, ok := i.Families[strings.Join(words, " ")]; ok {
+			return f, true
+		}
+	}
+	return Family{}, false
+}
+
+// styleWords are the words a full face name adds to its family's.
+var styleWords = map[string]bool{
+	"regular": true, "normal": true, "book": true, "roman": true, "plain": true,
+	"bold": true, "italic": true, "oblique": true, "medium": true, "semibold": true,
+	"light": true, "thin": true, "extralight": true, "extrabold": true, "black": true,
+	"heavy": true, "retina": true,
 }
 
 // Names is every family found, sorted, for `codeshot doctor` to count and

@@ -13,6 +13,7 @@ package pipe
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,11 @@ import (
 	"codeshot/internal/adapters/tty"
 	"codeshot/internal/domain"
 )
+
+// ErrNothing is an empty pipe from a command nobody named. That picture is a
+// blank window, and the likelier story is a mistyped subcommand, `codeshot
+// tehmes`, run where standard input is not a terminal: a script, CI, an agent.
+var ErrNothing = errors.New("standard input was empty and no command was given")
 
 type Source struct {
 	// In is the stream to read to end-of-file.
@@ -65,6 +71,9 @@ func (s Source) Capture() (domain.Capture, error) {
 	captured := tap.New(s.Stdout)
 	if _, err := io.Copy(captured, s.In); err != nil {
 		return domain.Capture{}, fmt.Errorf("reading standard input: %w", err)
+	}
+	if captured.Len() == 0 && s.Command == "" {
+		return domain.Capture{}, ErrNothing
 	}
 	return domain.Capture{
 		Command: s.Command,

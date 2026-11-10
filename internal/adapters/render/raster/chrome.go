@@ -71,14 +71,7 @@ func (r Renderer) drawTitle(img *image.RGBA, l layout, w domain.Window) error {
 		return nil
 	}
 	x := l.window.Min.X + (l.window.Dx()-measure(title))/2
-	// A title at full foreground strength shouts over the output it labels.
-	fg, bg := w.Theme.Foreground, w.Theme.Background
-	dim := color.RGBA{
-		uint8((int(fg.R) + int(bg.R)) / 2),
-		uint8((int(fg.G) + int(bg.G)) / 2),
-		uint8((int(fg.B) + int(bg.B)) / 2),
-		0xFF,
-	}
+	dim := titleColor(w.Theme.Foreground, w.Theme.Background)
 	baseline := l.window.Min.Y + l.titlebar/2 + 4*l.scale
 	for _, ru := range title {
 		x += r.drawTitleRune(img, ru, sizePx, face, dim, x, baseline)
@@ -259,4 +252,42 @@ func fitTitle(measure func(string) int, title string, avail int) (string, bool) 
 		}
 	}
 	return ellipsis, true
+}
+
+// titleColor is the foreground faded toward the background, so a title does
+// not shout over the output it labels, but only as far as text can go and
+// still be read: 4.5:1 against the background. A theme whose own foreground
+// is fainter than that gets its foreground.
+func titleColor(fg, bg domain.RGBA) color.RGBA {
+	mix := func(t float64) color.RGBA {
+		at := func(f, b uint8) uint8 { return uint8(math.Round(float64(b) + t*(float64(f)-float64(b)))) }
+		return color.RGBA{at(fg.R, bg.R), at(fg.G, bg.G), at(fg.B, bg.B), 0xFF}
+	}
+	back := luminance(bg.R, bg.G, bg.B)
+	for t := 0.5; t < 1; t += 0.05 {
+		c := mix(t)
+		if contrast(luminance(c.R, c.G, c.B), back) >= 4.5 {
+			return c
+		}
+	}
+	return mix(1)
+}
+
+// luminance is WCAG's relative luminance of an sRGB colour.
+func luminance(r, g, b uint8) float64 {
+	lin := func(c uint8) float64 {
+		v := float64(c) / 255
+		if v <= 0.03928 {
+			return v / 12.92
+		}
+		return math.Pow((v+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b)
+}
+
+func contrast(a, b float64) float64 {
+	if a < b {
+		a, b = b, a
+	}
+	return (a + 0.05) / (b + 0.05)
 }

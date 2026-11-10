@@ -14,12 +14,63 @@ import (
 	"codeshot/internal/home"
 )
 
+// findings is everything doctor looks at, gathered once and then written as
+// text for a person or, with --json, for a script or an agent. The JSON names
+// are the shape a caller can rely on; the text may change.
+type findings struct {
+	Version string `json:"version"`
+	Config  struct {
+		Codeshot struct {
+			Path  string   `json:"path"`
+			Keys  []string `json:"keys"`
+			Error string   `json:"error,omitempty"`
+			// Suggested is where a config would be read from, when there is none.
+			Suggested string `json:"suggested,omitempty"`
+		} `json:"codeshot"`
+		Ghostty *ghosttyFindings `json:"ghostty"`
+	} `json:"config"`
+	Themes struct {
+		Embedded    []string `json:"embedded"`
+		Directories []string `json:"directories"`
+		Resolvable  int      `json:"resolvable"`
+	} `json:"themes"`
+	Fonts struct {
+		DrawingWith string   `json:"drawing_with"`
+		Index       string   `json:"index"`
+		Families    int      `json:"families"`
+		Scanned     []string `json:"scanned"`
+		Fallbacks   []string `json:"fallbacks"`
+		Symbols     []string `json:"symbols"`
+	} `json:"fonts"`
+	Output struct {
+		Gallery          string `json:"gallery"`
+		GalleryWritable  bool   `json:"gallery_writable"`
+		GalleryError     string `json:"gallery_error,omitempty"`
+		Clipboard        bool   `json:"clipboard"`
+		ClipboardProblem string `json:"clipboard_error,omitempty"`
+	} `json:"output"`
+	Terminal struct {
+		Cols     int  `json:"cols"`
+		Rows     int  `json:"rows"`
+		Terminal bool `json:"stderr_is_terminal"`
+	} `json:"terminal"`
+}
+
+type ghosttyFindings struct {
+	Path       string  `json:"path"`
+	Theme      string  `json:"theme"`
+	FontFamily string  `json:"font_family"`
+	FontSize   float64 `json:"font_size"`
+	PaddingX   int     `json:"padding_x"`
+	PaddingY   int     `json:"padding_y"`
+}
+
 // doctor reports what codeshot found on this machine. Everything it prints is
-// something that changes what a picture looks like or where it goes, so that
+// something that changes what a shot looks like or where it goes, so that
 // "why is this not my theme" and "why is that glyph a box" can be answered by
 // reading rather than guessing.
 func doctor(args []string, stdout, stderr io.Writer) int {
-	configPath := ""
+	configPath, asJSON := "", false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--config" && i+1 < len(args):
@@ -27,88 +78,162 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 			configPath = args[i]
 		case strings.HasPrefix(args[i], "--config="):
 			configPath = strings.TrimPrefix(args[i], "--config=")
-		case args[i] == "-h" || args[i] == "--help":
+		case args[i] == "--json" || args[i] == "-json":
+			asJSON = true
+		case args[i] == "-h" || args[i] == "--help" || args[i] == "help":
 			fmt.Fprint(stdout, usage)
 			return 0
+		default:
+			fmt.Fprintf(stderr, "codeshot: doctor takes --config <path> and --json; %s is not one of them\n", args[i])
+			return 2
+		}
+	}
+	f := look(configPath)
+	if asJSON {
+		return writeJSON(stdout, stderr, f)
+	}
+	f.write(stdout)
+	return 0
+}
+
+func look(configPath string) findings {
+	var f findings
+	f.Version = version()
+
+	own, configErr := config.Load(configPath)
+	switch {
+	case configErr != nil:
+		f.Config.Codeshot.Error = configErr.Error()
+	case own.Path == "":
+		f.Config.Codeshot.Suggested = firstPath(config.Paths())
+	default:
+		f.Config.Codeshot.Path = own.Path
+		f.Config.Codeshot.Keys = own.Order
+	}
+	if gh, found := loadGhostty(); found {
+		f.Config.Ghostty = &ghosttyFindings{
+			Path: gh.Path, Theme: gh.Theme, FontFamily: gh.FontFamily,
+			FontSize: gh.FontSize, PaddingX: gh.PaddingX, PaddingY: gh.PaddingY,
 		}
 	}
 
-	out := &section{w: stdout}
-	fmt.Fprintf(stdout, "codeshot %s\n", Version)
+	src := themeSource()
+	// Asked for, not spelled out: a third embedded theme would make a
+	// hardcoded pair here lie, which is the fault `codeshot themes` had.
+	f.Themes.Embedded = theme.Source{}.Installed()
+	f.Themes.Directories = src.Dirs
+	f.Themes.Resolvable = len(src.Installed())
 
-	own, configErr := config.Load(configPath)
-	out.head("Config")
-	switch {
-	case configErr != nil:
-		out.line("codeshot", "%v", configErr)
-	case own.Path == "":
-		out.line("codeshot", "none; put one at %s", firstPath(config.Paths()))
-	default:
-		out.line("codeshot", "%s (%s)", home.Tildify(own.Path), strings.Join(own.Order, ", "))
+	index := loadFontIndex()
+	f.Fonts.DrawingWith = drawingWith(own, index)
+	f.Fonts.Index = fonts.CachePath()
+	f.Fonts.Families = len(index.Families)
+	f.Fonts.Scanned = fonts.SystemFontDirs()
+	f.Fonts.Fallbacks = installedFallbacks(index)
+	f.Fonts.Symbols = index.SymbolFamilies()
+
+	f.Output.Gallery = defaultGallery()
+	if err := writable(f.Output.Gallery); err != nil {
+		f.Output.GalleryError = err.Error()
+	} else {
+		f.Output.GalleryWritable = true
 	}
-	if gh, found := loadGhostty(); found {
+	if err := clipboardAvailable(); err != nil {
+		f.Output.ClipboardProblem = err.Error()
+	} else {
+		f.Output.Clipboard = true
+	}
+
+	f.Terminal.Cols, f.Terminal.Rows = tty.Size(os.Stderr)
+	f.Terminal.Terminal = tty.IsTerminal(os.Stderr)
+
+	// An empty list is [] in the JSON, never null, so a caller can range over
+	// any of them without checking first.
+	for _, list := range []*[]string{&f.Config.Codeshot.Keys, &f.Themes.Embedded, &f.Themes.Directories,
+		&f.Fonts.Scanned, &f.Fonts.Fallbacks, &f.Fonts.Symbols} {
+		if *list == nil {
+			*list = []string{}
+		}
+	}
+	return f
+}
+
+func (f findings) write(w io.Writer) {
+	out := &section{w: w}
+	fmt.Fprintf(w, "codeshot %s\n", f.Version)
+
+	out.head("Config")
+	own := f.Config.Codeshot
+	switch {
+	case own.Error != "":
+		out.line("codeshot", "%s", own.Error)
+	case own.Path == "":
+		out.line("codeshot", "none; put one at %s", own.Suggested)
+	default:
+		out.line("codeshot", "%s (%s)", home.Tildify(own.Path), strings.Join(own.Keys, ", "))
+	}
+	if gh := f.Config.Ghostty; gh != nil {
 		out.line("ghostty", "%s", home.Tildify(gh.Path))
-		out.line("", "theme %s, font-family %s, font-size %s, padding %d/%d",
-			orNone(gh.Theme), orNone(gh.FontFamily), orZero(gh.FontSize), gh.PaddingX, gh.PaddingY)
+		out.line("  theme", "%s", orNone(gh.Theme))
+		out.line("  font-family", "%s", orNone(gh.FontFamily))
+		out.line("  font-size", "%s", orZero(gh.FontSize))
+		out.line("  padding", "%d/%d", gh.PaddingX, gh.PaddingY)
 	} else {
 		out.line("ghostty", "none; codeshot uses its own defaults")
 	}
 
-	src := themeSource()
 	out.head("Themes")
-	// Asked for, not spelled out: a third embedded theme would make a
-	// hardcoded pair here lie, which is the fault `codeshot themes` had.
-	out.line("embedded", "%s", strings.Join(theme.Source{}.Installed(), ", "))
-	if dirs := src.Dirs; len(dirs) == 0 {
+	out.line("embedded", "%s", strings.Join(f.Themes.Embedded, ", "))
+	if len(f.Themes.Directories) == 0 {
 		out.line("directories", "none found; --theme takes a path to a theme file")
-	} else {
-		for _, dir := range dirs {
-			out.line("directories", "%s", dir)
-		}
 	}
-	out.line("resolvable", "%d names", len(src.Installed()))
+	for _, dir := range f.Themes.Directories {
+		out.line("directories", "%s", dir)
+	}
+	out.line("resolvable", "%d names", f.Themes.Resolvable)
 
-	index := loadFontIndex()
 	out.head("Fonts")
-	out.line("drawing with", "%s", drawingWith(own, index))
-	out.line("index", "%s (%d families)", home.Tildify(fonts.CachePath()), len(index.Families))
-	for _, dir := range fonts.SystemFontDirs() {
+	out.line("drawing with", "%s", f.Fonts.DrawingWith)
+	out.line("index", "%s (%d families)", home.Tildify(f.Fonts.Index), f.Fonts.Families)
+	for _, dir := range f.Fonts.Scanned {
 		out.line("scanned", "%s", home.Tildify(dir))
 	}
-	out.line("fallbacks", "%s", strings.Join(installedFallbacks(index), ", "))
-	out.line("symbols", "%s", symbolFonts(index))
+	if len(f.Fonts.Fallbacks) == 0 {
+		out.line("fallbacks", "none installed; a rune the font lacks will be a box")
+	}
+	for _, name := range f.Fonts.Fallbacks {
+		out.line("fallback", "%s", name)
+	}
+	// Its own line because "the icons are crossed-out boxes" is a question
+	// doctor should answer outright: a terminal that draws them may be doing
+	// it with a copy compiled into the terminal itself, which is a file
+	// codeshot has no way to read.
+	if len(f.Fonts.Symbols) == 0 {
+		out.line("symbols", "%s", "install `brew install --cask font-symbols-only-nerd-font` "+
+			"to draw Nerd Font icons; none is installed, so they draw as boxes")
+	}
+	for _, name := range f.Fonts.Symbols {
+		out.line("symbols", "%s", name)
+	}
 
 	out.head("Output")
-	gallery := defaultGallery()
-	out.line("gallery", "%s (%s)", home.Tildify(gallery), writability(gallery))
-	if err := clipboardAvailable(); err != nil {
-		out.line("clipboard", "%v", err)
+	if f.Output.GalleryWritable {
+		out.line("gallery", "%s (writable)", home.Tildify(f.Output.Gallery))
 	} else {
+		out.line("gallery", "%s (%s)", home.Tildify(f.Output.Gallery), f.Output.GalleryError)
+	}
+	if f.Output.Clipboard {
 		out.line("clipboard", "available for --clip")
+	} else {
+		out.line("clipboard", "%s", f.Output.ClipboardProblem)
 	}
 
 	out.head("Terminal")
-	cols, rows := tty.Size(os.Stderr)
-	if tty.IsTerminal(os.Stderr) {
-		out.line("size", "%dx%d, from stderr", cols, rows)
+	if f.Terminal.Terminal {
+		out.line("size", "%dx%d, from stderr", f.Terminal.Cols, f.Terminal.Rows)
 	} else {
-		out.line("size", "%dx%d; stderr is not a terminal here, so this is the fallback", cols, rows)
+		out.line("size", "%dx%d; stderr is not a terminal here, so this is the fallback", f.Terminal.Cols, f.Terminal.Rows)
 	}
-	return 0
-}
-
-// symbolFonts says whether anything on this machine can draw a Nerd Font
-// icon. It is its own line because "the icons are crossed-out boxes" is a
-// question doctor should answer outright: a terminal that draws them may be
-// doing it with a copy compiled into the terminal itself, which is a file
-// codeshot has no way to read.
-func symbolFonts(index fonts.Index) string {
-	names := index.SymbolFamilies()
-	if len(names) == 0 {
-		return "none installed, so Nerd Font icons draw as tofu; " +
-			"`brew install --cask font-symbols-only-nerd-font` is enough"
-	}
-	return strings.Join(names, ", ")
 }
 
 // section keeps doctor's output in two aligned columns.
@@ -135,34 +260,31 @@ func drawingWith(own config.Config, index fonts.Index) string {
 	if fam, ok := index.Lookup(name); ok {
 		return fmt.Sprintf("%s (%s)", fam.Name, from)
 	}
-	return fmt.Sprintf("%s from %s is not installed; using JetBrains Mono NL (embedded)", name, from)
+	return fmt.Sprintf("JetBrains Mono NL (embedded), because %s from %s is not installed", name, from)
 }
 
 func installedFallbacks(index fonts.Index) []string {
-	var found []string
+	found := []string{}
 	for _, name := range fonts.FallbackFamilies() {
 		if fam, ok := index.Lookup(name); ok && !fam.Files[0].Empty() {
 			found = append(found, fam.Name)
 		}
 	}
-	if len(found) == 0 {
-		return []string{"none installed; a rune the font lacks will be a box"}
-	}
 	return found
 }
 
-func writability(dir string) string {
+func writable(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Sprintf("cannot be created: %v", err)
+		return fmt.Errorf("cannot be created: %w", err)
 	}
 	probe := filepath.Join(dir, ".codeshot-write-test")
 	f, err := os.Create(probe)
 	if err != nil {
-		return fmt.Sprintf("not writable: %v", err)
+		return fmt.Errorf("not writable: %w", err)
 	}
 	f.Close()
 	os.Remove(probe)
-	return "writable"
+	return nil
 }
 
 func firstPath(paths []string) string {

@@ -362,3 +362,20 @@ func TestATitleWithNoRoomAtAllIsOmitted(t *testing.T) {
 		t.Errorf("close button = %d,%d,%d; something was drawn over it in a window with no room for a title", r, g, b)
 	}
 }
+
+// TestTitleIsReadable: the title is faded so it does not shout, but never
+// below the 4.5:1 text needs, in a light theme or a dark one.
+func TestTitleIsReadable(t *testing.T) {
+	for _, tc := range []struct{ fg, bg domain.RGBA }{
+		{domain.RGBA{R: 0xc3, G: 0xc8, B: 0xd1, A: 0xff}, domain.RGBA{R: 0x15, G: 0x18, B: 0x1d, A: 0xff}},
+		{domain.RGBA{R: 0x2b, G: 0x30, B: 0x3b, A: 0xff}, domain.RGBA{R: 0xfb, G: 0xfb, B: 0xfd, A: 0xff}},
+	} {
+		c := titleColor(tc.fg, tc.bg)
+		if r := contrast(luminance(c.R, c.G, c.B), luminance(tc.bg.R, tc.bg.G, tc.bg.B)); r < 4.5 {
+			t.Errorf("title on %v is %.2f:1", tc.bg, r)
+		}
+		if c == (color.RGBA{tc.fg.R, tc.fg.G, tc.fg.B, 0xff}) {
+			t.Errorf("title on %v is the full foreground; it should still be faded", tc.bg)
+		}
+	}
+}

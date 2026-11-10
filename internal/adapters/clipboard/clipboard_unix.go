@@ -40,4 +40,4 @@ func available() error {
 	return errNoTool
 }
 
-var errNoTool = errors.New("no clipboard tool found; install wl-clipboard (Wayland) or xclip (X11)")
+var errNoTool = errors.New("install wl-clipboard (Wayland) or xclip (X11) for --clip; neither is on PATH")

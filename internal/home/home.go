@@ -1,5 +1,5 @@
 // Package home contracts a path against the user's home directory, so that a
-// prompt line and a "Stored codeshot in …" line read the way a person would
+// prompt line and a "Stored the shot in …" line read the way a person would
 // write the path rather than the way the filesystem spells it.
 //
 // It exists because three packages had grown their own copy of the same

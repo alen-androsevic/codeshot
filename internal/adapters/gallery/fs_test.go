@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"os"
@@ -64,5 +65,44 @@ func TestExists(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "yes.png"), []byte("x"), 0o644)
 	if !g.Exists("yes.png") {
 		t.Error("Exists missed a file that is there")
+	}
+}
+
+// TestStoreTrashesTheFileItReplaces: an explicit name replaces what is there,
+// and the old shot goes where it can be put back from, not nowhere.
+func TestStoreTrashesTheFileItReplaces(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "shot.png")
+	os.WriteFile(old, []byte("old"), 0o644)
+	bin := filepath.Join(t.TempDir(), "shot.png")
+	var told [2]string
+	g := FS{
+		Dir:      dir,
+		Trash:    func(p string) (string, error) { return bin, os.Rename(p, bin) },
+		Replaced: func(p, trashed string) { told = [2]string{p, trashed} },
+	}
+	if _, err := g.Store("shot.png", pixel()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if got, _ := os.ReadFile(bin); string(got) != "old" {
+		t.Errorf("the trash holds %q, want the old shot", got)
+	}
+	if told != [2]string{old, bin} {
+		t.Errorf("Replaced was told %q", told)
+	}
+}
+
+// TestStoreLeavesAFileItCannotTrash: when the old shot cannot be moved, it
+// stays, and the new one is not written over it.
+func TestStoreLeavesAFileItCannotTrash(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "shot.png")
+	os.WriteFile(old, []byte("old"), 0o644)
+	g := FS{Dir: dir, Trash: func(string) (string, error) { return "", errors.New("no trash") }}
+	if _, err := g.Store("shot.png", pixel()); err == nil {
+		t.Fatal("Store wrote over a file it could not trash")
+	}
+	if got, _ := os.ReadFile(old); string(got) != "old" {
+		t.Errorf("the old shot now holds %q", got)
 	}
 }

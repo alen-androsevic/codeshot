@@ -48,7 +48,7 @@ func (s Source) Theme(name string) (domain.Theme, error) {
 	}
 	th, err := parseFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		return domain.Theme{}, fmt.Errorf("theme %q: not embedded, not in any theme directory, and not a readable file", name)
+		return domain.Theme{}, fmt.Errorf("use a name `codeshot themes` lists, or a path to a Ghostty theme file; %q is neither", name)
 	}
 	if err != nil {
 		return domain.Theme{}, err
@@ -123,7 +123,7 @@ func Parse(r io.Reader, name string) (domain.Theme, error) {
 	}
 	switch {
 	case !haveBackground && !haveForeground:
-		return domain.Theme{}, fmt.Errorf("theme %q: no background or foreground colour; this does not look like a Ghostty theme file", name)
+		return domain.Theme{}, fmt.Errorf("point --theme at a Ghostty theme file, not a config: %q has no background or foreground colour", name)
 	case !haveBackground:
 		return domain.Theme{}, fmt.Errorf("theme %q: no background colour", name)
 	case !haveForeground:

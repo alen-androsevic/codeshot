@@ -21,7 +21,7 @@ func (w Writer) Stored(path string) {
 	if path == "" {
 		return
 	}
-	fmt.Fprintf(w.Err, "Stored codeshot in %s\n", home.Tildify(path))
+	fmt.Fprintf(w.Err, "Stored the shot in %s\n", home.Tildify(path))
 }
 
 func (w Writer) Warn(msg string) {

@@ -11,7 +11,7 @@ import (
 func TestStoredNamesThePath(t *testing.T) {
 	var err bytes.Buffer
 	Writer{Err: &err}.Stored("/tmp/shots/ls-la.png")
-	if err.String() != "Stored codeshot in /tmp/shots/ls-la.png\n" {
+	if err.String() != "Stored the shot in /tmp/shots/ls-la.png\n" {
 		t.Errorf("stderr = %q", err.String())
 	}
 }
@@ -24,7 +24,7 @@ func TestStoredContractsTheHomeDirectory(t *testing.T) {
 	t.Setenv("HOME", home)
 	var err bytes.Buffer
 	Writer{Err: &err}.Stored(filepath.Join(home, "Codeshots", "ls-la.png"))
-	if got := err.String(); got != "Stored codeshot in ~/Codeshots/ls-la.png\n" {
+	if got := err.String(); got != "Stored the shot in ~/Codeshots/ls-la.png\n" {
 		t.Errorf("stderr = %q, want the home directory contracted to ~", got)
 	}
 }

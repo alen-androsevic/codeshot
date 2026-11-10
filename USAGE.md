@@ -5,14 +5,17 @@ Turn a command's output into a PNG that looks like a terminal window.
 ## Install
 
 ```sh
-./install.sh          # builds with the version stamped in, into ~/bin
+curl -fsSL https://raw.githubusercontent.com/alen-androsevic/codeshot/main/install.sh | bash
 ```
 
-or by hand, without the version:
+or from a clone, with Go:
 
 ```sh
-go build -o codeshot ./cmd/codeshot && mv codeshot ~/bin/
+./install.sh          # builds with the version stamped in, into ~/bin
+go build -o codeshot ./cmd/codeshot && mv codeshot ~/bin/   # by hand
 ```
+
+The README says how to uninstall.
 
 ## Take a shot
 
@@ -23,13 +26,13 @@ codeshot -- ls -la
 ```
 
 The command runs exactly as it would bare, output live in your terminal, and
-the picture lands in `~/Codeshots/ls-la.png`. codeshot exits with the
+the shot lands in `~/Codeshots/ls-la.png`. codeshot exits with the
 command's own status, so it's safe in front of anything a script checks.
 
 ## Examples
 
 ```sh
-# Name the file yourself
+# Name the file yourself; an existing shot.png goes to the Trash first
 codeshot shot.png -- npm test
 codeshot --out shot.png -- npm test        # the same thing
 
@@ -71,7 +74,7 @@ codeshot --no-prompt -- fortune
 codeshot --cols 80 -- git log --graph
 
 # Show a different command line than the one that ran - keeps a secret
-# out of the picture and out of the filename
+# out of the shot and out of the filename
 codeshot --command "deploy" -- deploy --token="$TOKEN"
 ```
 
@@ -111,7 +114,7 @@ codeshot's side.
 
 A pipe carries **standard output only**. Anything the command writes to
 standard error goes straight past codeshot to your terminal and never
-reaches the picture, which is how `npm test | codeshot` comes out holding
+reaches the shot, which is how `npm test | codeshot` comes out holding
 npm's two banner lines and none of jest's results: jest writes to standard
 error. Redirect it in, `npm test 2>&1 | codeshot`, or use the wrapper.
 
@@ -142,7 +145,7 @@ four settings it can honour: `theme`, `font-size`, `window-padding-x` and
 `window-padding-y`. A shot from a Catppuccin Mocha terminal comes out in
 Catppuccin Mocha with nothing passed on the command line. A `theme` naming
 both a light and a dark one gets the dark one, so the same command gives the
-same picture whatever time of day it is.
+same shot whatever time of day it is.
 
 Named themes resolve against a Ghostty installation, so any of the several
 hundred it ships works:
@@ -194,7 +197,7 @@ codeshot render out.ansi --command "ls -la"
 The dump has to have come through a pty, e.g. from `script`
 (`script -q out.ansi ls -G -la` on macOS,
 `script -qc "ls --color=always -la" out.ansi` on Linux). A plain `>`
-redirect loses the carriage returns and the picture stair-steps; codeshot
+redirect loses the carriage returns and the shot stair-steps; codeshot
 warns when a dump looks like that. `--command` is what shows after the
 prompt: a dump holds only output, so pass it or use `--no-prompt`.
 
@@ -205,7 +208,7 @@ prompt: a dump holds only output, so pass it or use `--no-prompt`.
 | `ls` has no colour on macOS | That's `ls`, not codeshot: use `ls -G`, or `export CLICOLOR=1` |
 | Piped output is grey | A pipe is not a terminal, so the tool dropped its colour. Use the wrapper, or `--color=always` |
 | Piped output has no prompt line | codeshot can't know the command: pass `--command`, or source a shim |
-| Most of a piped run is missing from the picture | A pipe carries standard output only, and jest and most test runners write to standard error: `cmd 2>&1 \| codeshot`, or use the wrapper |
+| Most of a piped run is missing from the shot | A pipe carries standard output only, and jest and most test runners write to standard error: `cmd 2>&1 \| codeshot`, or use the wrapper |
 | Wrapping differs from your terminal | codeshot sizes from stderr; if that's redirected it falls back to 100 columns. Pass `--cols` |
 | `--clip` says no clipboard tool | Linux needs `wl-clipboard` (Wayland) or `xclip` (X11); macOS needs nothing |
 | `--stdout` printed junk in my terminal | That's the PNG. Redirect it: `codeshot --stdout -- cmd > shot.png` |

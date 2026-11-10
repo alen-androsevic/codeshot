@@ -34,9 +34,10 @@ func TestCaptureReadsStdinToTheEnd(t *testing.T) {
 }
 
 // TestCaptureOfNothingIsStillACapture: design §10 says an empty capture is a
-// valid image - prompt and command line, nothing under them.
+// valid image - prompt and command line, nothing under them. `grep x file |
+// codeshot --command "grep x file"` that matched nothing is one.
 func TestCaptureOfNothingIsStillACapture(t *testing.T) {
-	c, err := Source{In: strings.NewReader(""), Size: notATerminal(t)}.Capture()
+	c, err := Source{In: strings.NewReader(""), Command: "grep x file", Size: notATerminal(t)}.Capture()
 	if err != nil {
 		t.Fatalf("Capture: %v", err)
 	}
@@ -45,8 +46,18 @@ func TestCaptureOfNothingIsStillACapture(t *testing.T) {
 	}
 }
 
+// TestCaptureOfNothingFromNobodyIsAMistake: with no command either, the
+// picture is a blank window, and `codeshot tehmes` in a script is the likelier
+// story.
+func TestCaptureOfNothingFromNobodyIsAMistake(t *testing.T) {
+	_, err := Source{In: strings.NewReader(""), Size: notATerminal(t)}.Capture()
+	if !errors.Is(err, ErrNothing) {
+		t.Errorf("err = %v, want ErrNothing", err)
+	}
+}
+
 func TestCaptureTakesItsWidthFromTheTerminal(t *testing.T) {
-	c, err := Source{In: strings.NewReader(""), Size: notATerminal(t)}.Capture()
+	c, err := Source{In: strings.NewReader("x"), Size: notATerminal(t)}.Capture()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +65,7 @@ func TestCaptureTakesItsWidthFromTheTerminal(t *testing.T) {
 		t.Errorf("Capture is %dx%d, want the 100x24 fallback with no terminal", c.Cols, c.Rows)
 	}
 
-	c, err = Source{In: strings.NewReader(""), Cols: 72, Size: notATerminal(t)}.Capture()
+	c, err = Source{In: strings.NewReader("x"), Cols: 72, Size: notATerminal(t)}.Capture()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +89,7 @@ func TestCaptureCarriesTheCommandAndCwd(t *testing.T) {
 
 func TestCaptureFallsBackToTheWorkingDirectory(t *testing.T) {
 	wd, _ := os.Getwd()
-	c, err := Source{In: strings.NewReader(""), Size: notATerminal(t)}.Capture()
+	c, err := Source{In: strings.NewReader("x"), Size: notATerminal(t)}.Capture()
 	if err != nil {
 		t.Fatal(err)
 	}

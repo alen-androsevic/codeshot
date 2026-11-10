@@ -19,8 +19,8 @@ had to precede them: the parse/build split in the CLI and the
 carriage-return warning moving into `file.Source`.
 
 `--force` was dropped rather than built: an explicit name still overwrites,
-so there is nothing for it to unlock. If refusing to overwrite ever becomes
-the default, this is the flag that would make it bearable.
+so there is nothing for it to unlock. The file it replaces goes to the Trash
+first, so overwriting can be undone without a flag or a prompt.
 
 ---
 
