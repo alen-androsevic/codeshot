@@ -130,9 +130,14 @@ which wins over the defaults above. Every flag is also a key in that file.
 // io.Reader because wrapper mode puts it into raw mode when it is a terminal,
 // which is something done to a file descriptor; nil forwards nothing.
 func Run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+	// No arguments at a prompt is nothing to do. No arguments on the end of a
+	// pipe is `npm test | codeshot`, the plainest form pipe mode has.
 	if len(args) == 0 {
-		fmt.Fprint(stderr, "codeshot: nothing to do; try `codeshot -- <command>` or `codeshot render <file.ansi>`\n")
-		return 2
+		if stdin == nil || tty.IsTerminal(stdin) {
+			fmt.Fprint(stderr, "codeshot: nothing to do; try `codeshot -- <command>` or `codeshot render <file.ansi>`\n")
+			return 2
+		}
+		return capture(args, stdin, stdout, stderr)
 	}
 	switch args[0] {
 	case "--help", "-h", "help":
@@ -724,7 +729,7 @@ func (o options) fontSet(reporter report.Writer) (*fonts.Set, error) {
 	if name == "" {
 		name = o.fontFamily
 	}
-	if name == "" {
+	if name == "" || fonts.IsEmbedded(name) {
 		set, err := fonts.Embedded()
 		if err != nil {
 			return nil, err

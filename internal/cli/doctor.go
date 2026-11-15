@@ -246,7 +246,10 @@ func (s *section) line(label, format string, args ...any) {
 }
 
 // drawingWith answers the question doctor exists for: which font a shot taken
-// right now would actually use.
+// right now would actually use. It has to fail the way fontSet does, or
+// doctor reassures someone about a shot that then refuses to draw: `font` in
+// codeshot's config is the --font flag, and stops a shot when it is not
+// installed, while Ghostty's font-family falls back to the embedded family.
 func drawingWith(own config.Config, index fonts.Index) string {
 	name, from := "", ""
 	if v, ok := own.String("font"); ok {
@@ -254,13 +257,16 @@ func drawingWith(own config.Config, index fonts.Index) string {
 	} else if gh, found := loadGhostty(); found && gh.FontFamily != "" {
 		name, from = gh.FontFamily, "ghostty config"
 	}
-	if name == "" {
-		return "JetBrains Mono NL (embedded)"
+	if name == "" || fonts.IsEmbedded(name) {
+		return fonts.EmbeddedFamily + " (embedded)"
 	}
 	if fam, ok := index.Lookup(name); ok {
 		return fmt.Sprintf("%s (%s)", fam.Name, from)
 	}
-	return fmt.Sprintf("JetBrains Mono NL (embedded), because %s from %s is not installed", name, from)
+	if from == "codeshot config" {
+		return fmt.Sprintf("nothing; install %s or change font in %s, since a shot stops at a font that is not installed", name, home.Tildify(own.Path))
+	}
+	return fmt.Sprintf("%s (embedded), because %s from %s is not installed", fonts.EmbeddedFamily, name, from)
 }
 
 func installedFallbacks(index fonts.Index) []string {

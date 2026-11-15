@@ -75,6 +75,17 @@ const (
 	variantBoldItalic
 )
 
+// EmbeddedFamily is the family compiled into the binary. It is in no font
+// index, since nothing on the machine has to have it installed.
+const EmbeddedFamily = "JetBrains Mono NL"
+
+// IsEmbedded reports whether name asks for the embedded family, matched the
+// way Index.Lookup matches an installed one: ignoring case and surrounding
+// space. Without it, --font "JetBrains Mono NL" on a machine that never
+// installed the font would be refused as not installed, when it is the one
+// family codeshot always has.
+func IsEmbedded(name string) bool { return key(name) == key(EmbeddedFamily) }
+
 func Embedded() (*Set, error) {
 	s := &Set{faces: map[faceKey]font.Face{}}
 	files := [4]string{

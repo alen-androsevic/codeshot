@@ -419,15 +419,39 @@ func TestWrapperOfAMissingCommandIs127(t *testing.T) {
 // `codeshot -- make test` must see the tests fail, not a theme typo. Only a
 // clean child with a failed picture exits 1.
 func TestWrapperChildsFailureOutranksCodeshots(t *testing.T) {
-	code, _, _, stderr := runWrapped(t, "--theme", "no-such", "--", "sh", "-c", "exit 3")
+	// A gallery inside a regular file fails at the store, after the child
+	// has run. A bad theme no longer does: it stops codeshot before the
+	// child starts.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unwritable := filepath.Join(blocker, "gallery")
+	code, _, _, stderr := runWrapped(t, "--gallery", unwritable, "--", "sh", "-c", "exit 3")
 	if code != 3 {
 		t.Errorf("failed child, failed picture: exit %d, want the child's 3", code)
 	}
-	if !strings.Contains(stderr, "no-such") {
+	if !strings.Contains(stderr, unwritable) {
 		t.Errorf("stderr = %q, want the picture's failure still reported", stderr)
 	}
-	if code, _, _, _ := runWrapped(t, "--theme", "no-such", "--", "true"); code != 1 {
+	if code, _, _, _ := runWrapped(t, "--gallery", unwritable, "--", "true"); code != 1 {
 		t.Errorf("clean child, failed picture: exit %d, want 1", code)
+	}
+}
+
+// TestWrapperChecksTheThemeBeforeRunningTheCommand: a typo in --theme must
+// not cost a run of the command, which may be a deploy or a long test suite.
+func TestWrapperChecksTheThemeBeforeRunningTheCommand(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	code, dir, _, stderr := runWrapped(t, "--theme", "no-such", "--", "touch", marker)
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stderr: %s", code, stderr)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the command ran although the theme could not be resolved")
+	}
+	if got := shots(t, dir); len(got) != 0 {
+		t.Errorf("gallery = %v, want nothing", got)
 	}
 }
 
@@ -539,6 +563,22 @@ func TestPipeOfNothingFromNobodyIsAMistake(t *testing.T) {
 	}
 	if got := shots(t, dir); len(got) != 0 {
 		t.Errorf("gallery = %v, want nothing", got)
+	}
+}
+
+// TestPipeWithNoArgumentsAtAll is `npm test | codeshot`: no name, no flags,
+// not even --gallery, so HOME is moved aside for the default gallery to land
+// somewhere the test owns.
+func TestPipeWithNoArgumentsAtAll(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	var stdout, stderr bytes.Buffer
+	if code := Run(nil, pipeFrom(t, "x\r\n"), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if got := shots(t, filepath.Join(home, "Codeshots")); len(got) != 1 || got[0] != "codeshot.png" {
+		t.Errorf("gallery = %v, want codeshot.png", got)
 	}
 }
 
@@ -971,6 +1011,41 @@ func TestDoctorNamesTheConfigItRead(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), cfg) {
 		t.Errorf("doctor did not name the config it read:\n%s", stdout.String())
+	}
+}
+
+// TestFontNamingTheEmbeddedFamilyNeedsNoInstall: the suite's font index is
+// empty, the way it is on a machine that never installed JetBrains Mono NL,
+// and the family still resolves, from the flag and from the config.
+func TestFontNamingTheEmbeddedFamilyNeedsNoInstall(t *testing.T) {
+	renderedImage(t, "--font", "jetbrains mono nl")
+	renderedImage(t, "--config", writeConfig(t, "font = JetBrains Mono NL\n"))
+}
+
+func TestFontThatIsNotInstalledStopsTheShot(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	args := []string{"render", writeANSI(t), "shot.png", "--gallery", t.TempDir(), "--font", "No Such Mono"}
+	if code := Run(args, nil, &stdout, &stderr); code != 1 {
+		t.Errorf("exit %d, want 1; stderr: %s", code, stderr.String())
+	}
+}
+
+// TestDoctorAgreesWithTheShotAboutAMissingFont: `font` in codeshot's config
+// stops a shot when it is not installed, so doctor must not report a
+// fallback that the shot never takes.
+func TestDoctorAgreesWithTheShotAboutAMissingFont(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := writeConfig(t, "font = No Such Mono\n")
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--config", cfg}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "install No Such Mono") {
+		t.Errorf("doctor did not say the font has to be installed:\n%s", out)
+	}
+	if strings.Contains(out, "(embedded), because") {
+		t.Errorf("doctor reported a fallback the shot does not take:\n%s", out)
 	}
 }
 

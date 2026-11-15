@@ -75,6 +75,7 @@ Stored the shot in ~/Codeshots/ls-shim.png
 - Keystrokes reach the command, and window resizes follow it.
 - The `Stored the shot in …` line goes to standard error.
 - When standard output is a file or a pipe, it gets no escape codes, and `\n` in place of `\r\n`.
+- codeshot checks the theme and the font before it runs the command. A theme or font that does not resolve exits 1, and the command does not run.
 - codeshot exits with the command's status. See [Exit codes](#exit-codes).
 
 Pagers wait for a key under the wrapper. Turn them off for the command:
@@ -124,7 +125,7 @@ go version go1.27.4 darwin/arm64
 
 ### Pipe mode
 
-codeshot reads standard input and passes it through. Pass `--command`, a `name` or both.
+codeshot reads standard input and passes it through. With no `--command`, no shim and no `name`, the shot is `codeshot.png`.
 
 ```bash
 ls shim | codeshot --command "ls shim"
@@ -295,7 +296,6 @@ codeshot --theme ~/.config/ghostty/config -- ls shim
 ```
 
 ```text
-codeshot.bash	codeshot.zsh	shim_test.go
 codeshot: point --theme at a Ghostty theme file, not a config: "config" has no background or foreground colour
 ```
 
@@ -313,8 +313,8 @@ codeshot-light
 ## Fonts
 
 - The embedded font is JetBrains Mono NL, in regular, bold, italic and bold-italic.
-- `--font <family>` draws with a family installed on the machine. `codeshot doctor` lists them.
-- A family that is not installed exits 1: `codeshot: pick a font family `codeshot doctor` lists; "Nosuch" is not installed`.
+- `--font <family>` draws with a family installed on the machine, or with `JetBrains Mono NL`. `codeshot doctor` lists the installed ones.
+- A family from `--font` or from `font` in the codeshot config that is not installed exits 1: `codeshot: pick a font family `codeshot doctor` lists; "Nosuch" is not installed`.
 - A rune the family has no glyph for is drawn with the platform's fallback families. `codeshot doctor` lists them.
 - A family with no italic is sheared 12°. A family with no bold is double-struck.
 - Colour emoji are drawn from Apple Color Emoji on macOS. On Linux they draw as boxes.

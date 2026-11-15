@@ -39,6 +39,13 @@ type Service struct {
 }
 
 func (s Service) Run(req Request) (Outcome, error) {
+	// The theme is resolved before the source runs. A wrapped command runs
+	// for real, and a theme name with a typo in it must not cost a deploy or
+	// a test run that then has nothing to show for it.
+	theme, err := s.Themes.Theme(themeName(req.Theme))
+	if err != nil {
+		return Outcome{}, err
+	}
 	capture, err := s.Source.Capture()
 	if err != nil {
 		// A source can fail and still know the exit code - a wrapped command
@@ -55,10 +62,6 @@ func (s Service) Run(req Request) (Outcome, error) {
 		return out, fmt.Errorf("emulating the capture: %w", err)
 	}
 	header, err := s.header(capture, req)
-	if err != nil {
-		return out, err
-	}
-	theme, err := s.Themes.Theme(themeName(req.Theme))
 	if err != nil {
 		return out, err
 	}

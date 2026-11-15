@@ -205,6 +205,28 @@ func TestRunFailsWhenTheThemeIsUnknown(t *testing.T) {
 	}
 }
 
+// countingSource records whether it was asked to capture, which for the
+// wrapper means running the command.
+type countingSource struct{ calls *int }
+
+func (s countingSource) Capture() (domain.Capture, error) {
+	*s.calls++
+	return domain.Capture{Cols: 10, Rows: 4}, nil
+}
+
+func TestRunResolvesTheThemeBeforeTheSourceRuns(t *testing.T) {
+	s, _, _, _ := newService()
+	calls := 0
+	s.Source = countingSource{calls: &calls}
+	s.Themes = stubThemes{err: errors.New("no such theme")}
+	if _, err := s.Run(Request{Theme: "nope"}); err == nil {
+		t.Fatal("Run ignored an unresolvable theme")
+	}
+	if calls != 0 {
+		t.Errorf("the source ran %d times before the theme failed, want 0", calls)
+	}
+}
+
 func TestRunPassesFrameOptionsThrough(t *testing.T) {
 	s, rend, _, _ := newService()
 	s.Run(Request{Frame: domain.FrameOptions{Rows: 1}})

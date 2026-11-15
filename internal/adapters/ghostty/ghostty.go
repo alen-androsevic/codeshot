@@ -4,7 +4,7 @@
 // optional: the file's absence is never an error, and nothing here is
 // required for codeshot to run.
 //
-// Only four keys are read. Ghostty configs carry a great deal else, and
+// Only five keys are read. Ghostty configs carry a great deal else, and
 // everything unrecognised is skipped, the way the theme parser skips it.
 package ghostty
 
@@ -68,7 +68,7 @@ func Load() (Config, bool) {
 	return Config{}, false
 }
 
-// Parse reads the four keys codeshot understands. A value it cannot make
+// Parse reads the five keys codeshot understands. A value it cannot make
 // sense of is left alone rather than reported: this file is not codeshot's,
 // and refusing to run because of a key codeshot happens to read would be a
 // poor trade for a setting nobody asked it to honour.
