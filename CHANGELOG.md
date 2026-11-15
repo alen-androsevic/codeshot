@@ -3,6 +3,21 @@
 codeshot follows semantic versioning. Newest first. Each breaking change has a
 line saying what to do instead.
 
+## 0.1.2 (2026-11-15)
+
+- `<command> | codeshot` with no arguments takes a shot, named
+  `codeshot.png`, instead of saying there is nothing to do.
+- `--font "JetBrains Mono NL"`, or `font = JetBrains Mono NL` in the config,
+  draws with the embedded family on a machine that does not have it
+  installed.
+- A `--theme` that does not resolve exits 1 before the wrapped command runs,
+  not after.
+- `codeshot doctor` says a shot stops when `font` in codeshot's config is not
+  installed, which is what the shot does, instead of naming a fallback.
+- codeshot is licensed under GPL-3.0.
+- README.md lists every flag with its default, the configuration and the exit
+  codes. USAGE.md holds examples and troubleshooting.
+
 ## 0.1.1 (2026-11-10)
 
 - Windows is no longer a build target. It never had a pty, so codeshot did
