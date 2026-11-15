@@ -1,0 +1,509 @@
+# codeshot — design
+
+**Date:** 2026-09-10
+**Status:** approved, ready for planning
+
+## 1. Purpose
+
+`codeshot` turns one command and its output into a PNG that looks like a Ghostty
+window — rounded corners, macOS traffic lights, your terminal's theme and font.
+It is a documentation and sharing tool: the image you paste into a README, an
+issue, or a chat message.
+
+```
+❯ codeshot danas-usage-example.png -- paradajz danas
+… paradajz's output, live, in colour, exactly as if you had run it bare …
+Stored the shot in ~/Codeshots/danas-usage-example.png
+```
+
+## 2. Constraints
+
+These are hard requirements, and between them they determine the architecture.
+
+1. **A command is never executed twice.** The command runs once, under codeshot,
+   or not at all.
+2. **Neither Ghostty nor cmux is a dependency.** The image is synthesised from
+   bytes. No terminal is spawned, nothing is screenshotted, no Screen Recording
+   permission is requested.
+3. **The image contains the exact output and the exact command line.** Not a
+   re-render, not an approximation of what probably happened.
+4. **It works in a bare zsh or bash shell**, with no shell integration required.
+5. **No terminal output is ever written to disk.** There is no session
+   recorder and no ring buffer. The only files codeshot writes are the image
+   itself and a font-metadata index cache (family names and paths, never
+   terminal content).
+
+### What these constraints rule out
+
+A process cannot read its parent terminal's scrollback. With re-execution and
+terminal-specific APIs both excluded, the only way to hold the exact bytes of a
+command that has already finished would be to have been recording when it ran —
+a pty session recorder wrapping the interactive shell, in the manner of `script`
+or `asciinema`. Constraint 5 rules that out.
+
+**Therefore codeshot cannot reach the previous command (`!`).** It only sees
+what it is handed, which means the decision to take a shot is made *before* the
+command runs. This was a deliberate, informed trade: no background recorder, no
+terminal output on disk.
+
+## 3. Non-goals
+
+- Capturing a command that has already finished.
+- Recording or replaying whole sessions (asciinema's job).
+- Animated output (GIF/APNG).
+- Editing, annotating or arranging images after the fact.
+- Being a terminal emulator anyone would type into.
+
+## 4. Domain
+
+The core insight: **codeshot is a pure function from bytes to an image.**
+Everything impure — pty, filesystem, fonts, clipboard — lives at the edge.
+
+### Ubiquitous language
+
+- **Capture** — everything one command produced: command text (or argv), cwd,
+  exit code, duration, terminal size, and the raw ANSI byte stream. The only
+  thing a `CaptureSource` ever yields.
+- **Screen**, **Cell**, **Style** — the emulated grid. A Cell is a rune plus a
+  Style (fg, bg, bold, italic, underline, strikethrough, inverse, dim). A
+  Style's colours are **palette-relative** — indexed 0–15, 256-colour, or true
+  colour — and resolve against a **Theme** only at render time. That
+  indirection is what lets one Capture be rendered in any theme.
+- **Theme** — background, foreground, cursor, and a 16-colour palette, in
+  Ghostty's theme file format.
+- **Prompt** — a template resolved against the Capture's cwd (`{cwd}` → `~`).
+  In wrapper mode the real prompt was drawn by the parent shell before codeshot
+  ever ran, so the prompt line in the image is synthesised.
+- **Transcript** — Screen plus the Prompt line and command line above it.
+- **Frame** — the Transcript cropped to a viewport by an explicit rule (§8).
+- **Chrome** — control style (`macos` | `linux` | `none`), title, padding,
+  corner radius, shadow, margin, scale.
+- **Window** — Frame plus Chrome. The thing that gets rasterised.
+- **Codeshot** — the artifact: a Window, a name, and a destination in the
+  **Gallery** (`~/Codeshots` by default).
+
+### Profile resolution
+
+Theme, font and prompt are *profile* concerns, resolved by precedence:
+
+1. command-line flags
+2. `~/.config/codeshot/config` *(amended: `key = value`, not TOML — see §13)*
+3. `~/.config/ghostty/config`, **if it happens to exist** — `theme`,
+   `font-family`, `font-size`, `window-padding-x`, `window-padding-y`
+4. built-in defaults
+
+Step 3 is what makes the image look like *your* terminal while keeping Ghostty
+entirely optional. Its absence is never an error.
+
+## 5. Architecture
+
+Hexagonal, with a DDD-shaped core.
+
+**Driving side.** `internal/cli` parses argv, is the only code that knows
+flags exist, and is also the composition root: it wires the concrete adapters
+into the use case. `cmd/codeshot` is a three-line shim that hands argv to
+`cli.Run` and exits with what it returns.
+
+*(Amended during implementation. The composition root was originally placed
+in `cmd/codeshot`. It moved because `package main` is not practically
+testable — a composition root that lives there can only be exercised by
+building a binary and running it. With the wiring in `internal/cli`,
+`cli_test.go` drives whole runs in-process, from argv to a PNG on disk, which
+is where the argument-parsing and exit-code behaviour is actually pinned. The
+architectural goal is unchanged and still holds: the domain and the app layer
+stay pure, and knowledge of concrete adapters lives in exactly one package.
+That package is now `internal/cli` rather than `cmd/codeshot`.)*
+
+**Driven ports**, declared in `internal/app/ports.go`, implemented under
+`internal/adapters/`:
+
+| Port | Adapters in scope | Adapters the port leaves room for |
+|---|---|---|
+| `CaptureSource` | `pty` (wrapper), `pipe` (stdin), `file` (saved dump) | session recorder, tmux/cmux scrollback |
+| `Emulator` | in-house VT | `charmbracelet/x/vt` |
+| `Renderer` | `raster` (native Go) | `svg`, `html` — see the note below |
+| `FontResolver` | embedded JetBrains Mono + system directory scan | CoreText, fontconfig |
+| `ThemeSource` | embedded themes, Ghostty config/theme parser | iTerm2 `.itermcolors` |
+| `PromptSource` | template | `--prompt-command` (e.g. `starship prompt`) |
+| `Gallery` | filesystem | — |
+| `Clipboard` | `pbcopy` / `wl-copy` / `xclip` | — |
+| `Tty` | unix ioctl (size, isatty) | — |
+
+*Amended during implementation:* `Clipboard` is not a port either, and for a
+different reason than `Tty`. A clipboard is not a second kind of thing
+codeshot drives; it is somewhere a picture can go, which is what `Gallery`
+already means. `--clip` and `--stdout` are `Gallery` implementations
+(`gallery.Clip`, `gallery.Writer`) chosen by the CLI, and the app layer never
+learns that either exists. `pbcopy` in the table above is wrong in fact as
+well: it puts everything on the pasteboard as text unless it is EPS or RTF,
+so macOS goes through `osascript` and «class PNGf».
+
+*Amended during implementation:* `Tty` is not a port. Nothing in
+`internal/app` ever asks for a terminal's size or puts one in raw mode — only
+the CLI and the pty source do, both on the edge — so a port for it would be
+an interface with no caller on the inside. It is `internal/adapters/tty`, a
+plain package the edge uses, and its per-OS work is `golang.org/x/term`'s.
+
+*Amended during implementation:* the `Renderer` and `Gallery` ports are typed
+on `image.Image`, which forecloses the `svg` and `html` adapters this table
+names — neither produces a raster image, and a `Gallery` that stores one
+cannot store a document. Reshaping both ports around some format-neutral
+artifact type, for the sake of two adapters that do not exist and may never,
+is speculative generality: the abstraction would be designed against imagined
+requirements rather than real ones, and would almost certainly be the wrong
+shape when a second renderer finally arrived. The ports stay as they are. If
+and when a second renderer is actually built, that is the moment to reshape
+them, with a real second implementation to design against — and this note is
+the record that the constraint was seen and accepted rather than missed.
+
+### The OS seam
+
+Only four things are per-OS, one file each behind a build tag: **pty creation**,
+**font directories**, **clipboard**, **config/cache paths**. Chrome style is
+deliberately *not* an OS branch — it is a domain option, so a Linux machine can
+render macOS traffic lights and vice versa. Porting to another OS is those four
+files plus, optionally, a new chrome preset.
+
+*Amended after 0.1.0:* codeshot runs on macOS and Linux only. Windows had a
+font-directory and a clipboard file but never a pty, so it did not build, and
+those files are gone rather than kept for a port nobody is doing. A Windows
+port would start with ConPTY.
+
+### Dependencies
+
+`github.com/creack/pty`, `github.com/mattn/go-runewidth`,
+`golang.org/x/image`, `golang.org/x/term` (terminal size and raw mode, from
+the same `golang.org/x` family whose `x/sys` was already in the tail), and —
+since `go-runewidth` v0.0.30 stopped being a leaf
+— `github.com/clipperhouse/uax29/v2` in the tail behind it. Nothing else; see
+`docs/adr/0003-dependency-tail.md` for why that last one is accepted rather
+than pinned away. Go, `module codeshot`, hand-rolled argument
+parsing, matching the conventions of the paradajz repo.
+
+### Why native rasterisation
+
+Considered and rejected: emitting SVG and rasterising with resvg/librsvg (drags
+in cgo or an external binary), and emitting HTML for a headless browser
+(perfect typography, but a browser is a heavier dependency than the Ghostty
+just removed). Walking the cell grid with `golang.org/x/image` is deterministic,
+dependency-free, identical on macOS, Linux and CI, and golden-image testable.
+The cost is owning font fallback, and no bitmap colour emoji (§7).
+
+### Why an in-house VT emulator
+
+The required surface is bounded (§7, scope list) — roughly 800 testable lines —
+against pulling in a library and its dependency tail. It sits behind the
+`Emulator` port, so swapping in `charmbracelet/x/vt` later is one adapter.
+
+## 6. Flows
+
+### Wrapper — `codeshot danas.png -- paradajz danas`
+
+Primary mode. Allocate a pty sized from **stderr** (stdout may be redirected),
+spawn the command with `TERM` and `COLORTERM` set, copy pty → stdout live so
+the user watches it run normally, and tee into an in-memory buffer. Forward
+`SIGWINCH`; propagate the child's exit code as codeshot's own. The command text
+comes from argv, so the rendered line is exactly `❯ paradajz danas`.
+
+The wrapper is transparent: passthrough on stdout, the "Stored the shot in …"
+line on stderr. *Amended after the MIG review:* a passthrough that is not a
+terminal has its escape sequences and the pty's `\r\n` taken out, so
+`codeshot -- ls -G > out.txt` holds what `ls -G > out.txt` would.
+
+*Amended during implementation:*
+
+- **stdin.** When stdin is a terminal it is put into raw mode for the length
+  of the run and forwarded through the pty, so every keystroke reaches the
+  child with the pty's own line discipline doing the cooking; it is restored
+  exactly on the way out. When stdin is *not* a terminal — `< file`, or a
+  pipe — it is handed to the child directly, and only stdout and stderr are
+  on the pty. Forwarding a file through a line discipline built for a person
+  typing echoed the input into the picture, drew a `^D` there when the input
+  ran out, turned a `0x03` byte into SIGINT, and hung on any line past
+  macOS's 1024-byte canonical limit. Tools decide colour from their output,
+  which stays on the terminal.
+- **TERM** is set to `xterm-256color` even over a caller's own, and
+  `COLORTERM` to `truecolor`. The terminal the child is really writing to is
+  codeshot's emulator; a `TERM=xterm-ghostty` would send it to Ghostty's
+  terminfo for sequences the emulator does not know.
+- **Signals.** SIGINT, SIGTERM and SIGHUP sent to codeshot are forwarded to
+  the child's process group. The child leads a session of its own on the
+  pty, so they would not reach it otherwise; forwarding them means codeshot
+  outlives them, restores the terminal, and still takes the picture of an
+  interrupted run.
+- **Size.** `--cols` pins the width across resizes. The capture records the
+  final size, the layout a TUI's last frame was drawn for.
+
+### Pipe — `paradajz danas | codeshot danas.png`
+
+Read stdin to EOF. codeshot cannot know the command, so an optional shell shim
+(`shim/codeshot.zsh`, `shim/codeshot.bash`) recovers it from `fc -ln -1`,
+strips the trailing `| codeshot …`, and passes it as `--command`. Without the
+shim, pass `--command "…"` by hand or the prompt line is omitted.
+
+This mode is honestly degraded: a pipe is not a tty, so tools that check
+`isatty` drop their colour. The docs say so and point at the wrapper.
+
+*Amended during implementation:* pipe mode passes its input through to stdout
+as it reads, the way `tee` would, so a pipeline does not go dark while it
+runs — the same promise wrapper mode makes. The shims split the part that can
+be tested (`_codeshot_strip_pipe`, which drops the trailing `| codeshot …`)
+from the part that cannot (`fc -ln -1`, which needs an interactive shell's
+history), and the strip is tested in both zsh and bash.
+
+### Render — `codeshot render session.ansi out.png`
+
+A saved ANSI dump straight into the pipeline. This is the mode that makes
+phase 1 shippable and testable without a terminal.
+
+All three converge on the same `Capture`; from there the pipeline is pure.
+
+## 7. Rendering
+
+### Geometry
+
+Rendered at `--scale 2` by default, so the PNG is retina-crisp. Cell width is
+the font's advance rounded to an integer pixel, so the grid never drifts; cell
+height is ascent + descent + line gap, times `--line-height` (default 1.0).
+Default font size 13.
+
+- Titlebar 28px, painted the same colour as the terminal background — Ghostty's
+  transparent-titlebar look, with no separator hairline.
+- Traffic lights at x = 20, 40, 60, ø12, vertically centred: `#FF5F57`,
+  `#FEBC2E`, `#28C840`, each with a slightly darker ring.
+- Title centred, 11px, dimmed foreground. Defaults to the command text.
+- Corner radius 10 on all four corners.
+- Shadow: three-pass box blur (a good gaussian approximation), offset y+18,
+  radius 40, α 0.35. `--margin` defaults to 64 with the shadow on, 0 with it
+  off — the blur spreads about forty pixels and sits eighteen lower, and a
+  clipped shadow ends in a hard straight edge that reads as a bug. Outside the
+  margin: transparent, unless `--background #hex`.
+
+### Text
+
+Two passes. First, merge runs of cells sharing a background colour into single
+rectangles — this avoids seams between adjacent fills. Then glyphs.
+
+- Bold prefers a real bold face; falls back to synthetic emboldening.
+- Italic prefers a real italic face; falls back to a 12° shear.
+- Dim blends the foreground toward the background.
+- Inverse swaps fg and bg *after* the theme has resolved them to concrete
+  colours. *(Amended: this section originally said "before the theme
+  applies", which cannot work. Before resolution both colours are usually
+  `ColorDefault` — a palette-relative reference, not a colour — so swapping
+  them is a no-op, and inverse text would come out looking exactly like
+  ordinary text. The swap has to happen once the references have become the
+  theme's actual foreground and background, which is what `Theme.Resolve`
+  does and what every terminal does.)*
+- Underline and strikethrough are drawn as rules positioned from the cell's
+  baseline and ascent: the underline sits two pixels (times the scale) below
+  the baseline, the strike a third of the ascent above it, each one scale-unit
+  thick and spanning the cell's full width — both cells of a wide rune
+  included. *(Amended: this section originally said they "use the font's own
+  metrics". `golang.org/x/image`'s `font.Metrics` exposes ascent, descent,
+  height, x-height and cap-height, but not the `underlinePosition` and
+  `underlineThickness` fields of a font's `post` table, so the font's own
+  answer is not reachable through the API codeshot uses. The description above
+  is what is actually achievable, and what the code does.)*
+- No cursor is drawn.
+- Wide and combining runes are handled at grid level via `go-runewidth`.
+
+### Fonts
+
+A chain: `--font` → embedded JetBrains Mono (Ghostty's own default, so the
+resemblance is free) → system monospace candidates → tofu box. The resolver
+scans OS font directories once, indexes family names from each font's `name`
+table, and caches the index to `~/.cache/codeshot/fonts.json` with mtime
+invalidation. Glyph coverage is checked per rune.
+
+**Known limitations.** *(Amended: the dedicated adapter exists.)*
+`internal/adapters/fonts/sbix` reads Apple Color Emoji's bitmap strikes -
+PNGs in an `sbix` table, which `golang.org/x/image` parses and then draws
+nothing for - and the rasteriser composites them, fitted to the cell run and
+scaled with x/image's own scaler so the goldens stay byte-exact. Colour is
+the last resort, after every outline fallback, so text a monospace font can
+draw stays monochrome. sbix is Apple's format: Linux's CBDT/CBLC and COLR
+fonts are not read, so emoji are still tofu there. Nerd Font icons render
+only when a Nerd Font is installed and selected by name.
+
+### Themes
+
+Ghostty's theme file format, so `--theme /path/to/any/ghostty/theme` works
+against the several hundred Ghostty ships, and a named `--theme tokyonight`
+resolves against a local Ghostty installation's themes directory when one
+exists.
+
+Two themes are embedded for zero-config use, and they are codeshot's own —
+`codeshot-dark` (the default) and `codeshot-light`. codeshot does **not** ship
+copies of other projects' palettes under their names: a hand-typed
+"catppuccin-mocha" that drifts from the real one is worse than not having it.
+
+### VT emulator scope
+
+In scope: SGR (including 256-colour and true colour), CUP/CUU/CUD/CUF/CUB,
+ED/EL, scroll up/down, alternate screen enter/leave, OSC title, autowrap
+(DECAWM), `\r`, `\n`, `\t`, `\b`. Everything else is ignored silently and
+logged under `--debug`. The emulator keeps scrollback, so nothing is lost when
+output exceeds the terminal height.
+
+## 8. Framing rules
+
+The pty is sized from the caller's terminal, so that wrapping and TUI layout
+match what the user saw; without a tty it is 100×24. `--cols` overrides the pty
+width. Pty *height* has no flag — it only affects how a TUI lays itself out, and
+`--rows` is reserved for cropping the frame, below.
+
+The frame is chosen by one explicit rule:
+
+- **If the program used the alternate screen**, the frame is exactly
+  `cols × rows` — the final screen state.
+- **Otherwise**, the frame is the prompt line, the command line, and every
+  output line, from scrollback.
+
+Then: trailing all-blank lines are trimmed to none; `--rows N` crops to the
+first N lines (`--tail` crops to the last N instead).
+
+Defaults: no row crop, and no trailing prompt line after the output.
+`--rows 24` reproduces the framing of the motivating example.
+
+## 9. CLI surface
+
+```
+codeshot [flags] [name] -- <command> [args…]   wrapper (primary)
+codeshot [flags] [name]                        stdin (pipe)
+codeshot render <file.ansi> [name]             saved dump
+codeshot themes | doctor | version
+```
+
+`[name]` is optional; omitted, it slugs the command (`paradajz-danas.png`, then
+`-2`, `-3` on collision). A bare word lands in the gallery; anything containing
+`/` is treated as a path. A name that does not end in `.png` gets `.png`
+added — including one with a dot for some other reason, like `v0.2.0` or
+`my.backup`, since PNG is the only thing codeshot writes.
+
+Flags, in four groups, each mirrored by a `~/.config/codeshot/config` key of
+the same name:
+
+- **output** — `--out`, `--gallery`, `--clip`, `--stdout`, ~~`--force`~~
+- **frame** — `--cols`, `--rows`, `--tail`, `--prompt`, `--no-prompt`,
+  `--command`, `--cwd`
+- **window** — `--controls macos|linux|none`, `--title`, `--no-title`,
+  `--padding`, `--radius`, `--shadow`, `--margin`, `--scale`, `--background`
+- **style** — `--theme`, `--font`, `--font-size`, `--line-height`
+
+*Amended during implementation:* `--config <path>` reads codeshot's own
+defaults from somewhere other than the usual place, and `--prompt` and
+`--radius` reach the template and the corner radius. There is no `fonts`
+subcommand and no `config` subcommand: `doctor` reports both, which is what
+either would have been read for. The config file is the flat `key = value`
+shape Ghostty uses rather than TOML — every key is a flag name, there are no
+sections to put anything in, and TOML would have bought a dependency and a
+second format to learn. Keys are applied through the flag set itself, so one
+definition of what a setting means serves the file and the command line.
+
+`--stdout` writes the PNG to stdout and moves passthrough to stderr.
+
+*Amended during implementation:* `--out` is a second spelling of `[name]`,
+and giving both is a usage error rather than a precedence rule. `--clip`
+replaces the file rather than adding to it — the picture goes to the
+clipboard and nowhere else — so a name alongside `--clip` or `--stdout` is a
+usage error too, as is asking for both destinations at once. `--force` was
+dropped: it existed to unlock overwriting an existing file, and an explicit
+name still overwrites, so it would guard nothing. Generated names step
+around what is already there, as they always did. *Amended after the MIG
+review:* overwriting moves the old file to the Trash first (`~/.Trash`, or the
+freedesktop.org trash), and says where it went; replacing a shot can be
+undone, and codeshot still never asks. Where there is no trash to reach, the
+old file stays and the new shot is not stored.
+
+## 10. Errors and exit codes
+
+In wrapper mode codeshot exits with the child's exit code, so it is drop-in in
+front of anything. A failure in codeshot itself — unwritable gallery, unknown
+theme, unreadable font — exits 1 with a message on stderr, *after* the child has
+already run and its output has already passed through. Losing the image must
+never look like losing the command.
+
+*Amended during implementation:* the two rules above collide when the child
+fails *and* the picture does. The child's code wins: a script gating on
+`codeshot -- make test` must see the tests fail, not a theme typo. Only a
+clean child with a lost picture exits 1. And everything that can fail before
+the child runs — flags, fonts — does fail before it runs, while failing still
+costs nothing.
+
+Nonexistent command in wrapper mode: exit 127, matching the shell, and 126
+for one that exists but may not be run. No image is made: a picture of a
+command that never started would be a picture of nothing. A child killed by
+signal N exits 128+N, as a shell reports it.
+Empty capture (no output at all): still a valid image — prompt and command line
+only. *Amended after the MIG review:* except an empty pipe with no command
+known, which would be a blank window. That is far more often `codeshot
+tehmes` in a script, where standard input is not a terminal, than a picture
+anyone wants, so it exits 2 and stores nothing.
+
+## 11. Testing
+
+TDD throughout. The architecture pays for itself here: everything from bytes to
+PNG is pure and needs no terminal.
+
+- **Domain** — unit tests for framing rules, style and theme resolution, name
+  slugging and collision handling.
+- **Emulator** — table-driven fixtures. A `.ansi` corpus captured from real
+  tools (`ls --color`, `git status`, a `\r` progress spinner, an alt-screen
+  TUI) asserted against compact grid dumps with a style legend.
+- **Renderer** — golden PNGs, rendered with the embedded font only so no system
+  font can perturb them, compared byte-exact, with an `-update` flag to
+  regenerate.
+- **pty adapter** — an integration test asserting captured bytes, exit-code
+  propagation and `SIGWINCH` forwarding.
+- **End-to-end** — a smoke task in the `Taskfile`.
+
+## 12. Risks
+
+1. **Golden-image determinism across macOS and Linux.** *Verified; see
+   `docs/adr/0002-golden-determinism.md`.* The suite was run in a
+   `golang:1.27` Linux container and the goldens came out byte-identical to
+   the macOS ones, so byte-exact comparison stays and no tolerance was
+   introduced. Both machines were arm64; amd64 remains unchecked, which is the
+   open edge of this risk and matters most for CI.
+2. **Does JetBrains Mono cover `❯` (U+276F)?** The answer decides how early the
+   fallback chain must be working. Check before relying on the embedded font.
+3. **Scope creep in the in-house VT.** Bounded by the explicit list in §7;
+   anything outside it is ignored, not implemented.
+4. **Combining marks and wide runes in the grid.** Get the corpus fixtures in
+   early.
+
+## 13. Phases
+
+Each phase is shippable on its own.
+
+1. **Core.** Domain, emulator, renderer, `codeshot render file.ansi`. No pty,
+   no OS-specific code, fully testable.
+2. **Capture.** Pipe and wrapper sources, the real CLI, exit-code propagation,
+   the gallery.
+3. **Profile and polish.** Ghostty config reading, theme and font resolution,
+   `doctor`, `install.sh`, `Taskfile`, shell shims.
+
+## 14. Repo layout
+
+```
+cmd/codeshot/            composition root
+internal/domain/         pure: screen, cell, style, theme, frame, chrome, name
+internal/app/            use case + ports
+internal/adapters/
+  capture/pty/           wrapper mode
+  capture/pipe/          stdin mode
+  capture/file/          saved dump
+  vt/                    emulator
+  render/raster/         native Go rasteriser
+  fonts/                 embedded + system index
+  theme/                 embedded themes + ghostty parser
+  gallery/               filesystem
+  clipboard/             pbcopy / wl-copy / xclip
+  tty/                   size, isatty
+internal/cli/            flag parsing
+shim/                    codeshot.zsh, codeshot.bash
+docs/adr/                decisions as they accrue
+Taskfile
+install.sh
+```

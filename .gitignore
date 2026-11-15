@@ -1,0 +1,7 @@
+/codeshot
+build/
+*.png
+!docs/**/*.png
+!internal/**/testdata/*.png
+.superpowers/
+.DS_Store

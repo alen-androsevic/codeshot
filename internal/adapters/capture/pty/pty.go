@@ -1,0 +1,304 @@
+// Package pty runs a command once, under a pseudo-terminal codeshot owns, and
+// captures what it wrote. This is wrapper mode: `codeshot -- npm test`.
+//
+// The child gets a real terminal, so it keeps its colour, its progress bars
+// and its idea of the window width. The user gets a normal run - output live
+// as it happens, keystrokes reaching the child, resizes followed - and the
+// same bytes they watched go into the picture.
+package pty
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+
+	creack "github.com/creack/pty"
+
+	"codeshot/internal/adapters/capture/tap"
+	"codeshot/internal/adapters/tty"
+	"codeshot/internal/domain"
+)
+
+// The environment the child is told it is running in. TERM is set even when
+// the caller has one, because the terminal the child is really writing to is
+// codeshot's emulator, not whichever one codeshot was started in: a TERM of
+// xterm-ghostty sends the child to Ghostty's terminfo for sequences the
+// emulator has never heard of. xterm-256color is what the emulator speaks,
+// and every terminal a user might be watching from speaks it too.
+const (
+	term      = "xterm-256color"
+	colorterm = "truecolor"
+)
+
+type Source struct {
+	// Argv is the command and its arguments, exactly as given after --.
+	Argv []string
+	// Command replaces the command line the prompt shows and the shot is
+	// named after. Empty means Argv, quoted back into a command line. It is
+	// for what should not be in a picture: a token in an argument, say.
+	Command string
+	// Cwd is the directory the prompt line shows; empty means the real one.
+	// The child always runs where codeshot was started.
+	Cwd string
+	// Cols fixes the pty's width. Zero follows the terminal behind Size.
+	Cols int
+	// MaxCols caps the width. Zero means no cap.
+	MaxCols int
+	// Stdin, when it is a terminal, is put into raw mode for the length of
+	// the run and forwarded to the child through the pty. Anything else is
+	// handed to the child as its stdin directly. Nil gives the child the pty
+	// with nothing to read.
+	Stdin *os.File
+	// Stdout is where the child's output passes through live.
+	Stdout io.Writer
+	// Size is the terminal the pty's size is copied from and whose resizes it
+	// follows. The CLI hands over stderr: stdout is the one people redirect.
+	// Nil, or anything that is not a terminal, gets design §8's 100x24.
+	Size *os.File
+	// Env is the child's environment; nil means codeshot's own.
+	Env []string
+}
+
+func (s Source) Capture() (domain.Capture, error) {
+	if len(s.Argv) == 0 {
+		return domain.Capture{}, errors.New("no command to run")
+	}
+	command := s.Command
+	if command == "" {
+		command = shellJoin(s.Argv)
+	}
+	cwd := s.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	size := &windowSize{fixedCols: s.Cols, maxCols: s.MaxCols}
+	size.follow(s.Size)
+
+	// The resize handler is installed before the child starts, so a resize in
+	// the first instant of a run is not lost between the two.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+
+	cmd := exec.Command(s.Argv[0], s.Argv[1:]...)
+	cmd.Env = childEnv(s.Env)
+	// A stdin that is not a terminal - `< file`, or a pipe - goes to the
+	// child directly. The pty's line discipline is for a person typing: it
+	// echoes input into the picture, turns a 0x03 byte into SIGINT, and on
+	// macOS truncates a line past 1024 bytes. A file is not a person typing,
+	// and the child reading it directly sees the truth about it too: that
+	// stdin is not a tty. Output stays on the pty, and output is what decides
+	// colour. creack only fills in the streams left nil.
+	interactive := s.Stdin != nil && tty.IsTerminal(s.Stdin)
+	if s.Stdin != nil && !interactive {
+		cmd.Stdin = s.Stdin
+	}
+	// The child leads a new session with the pty as its controlling
+	// terminal. That is taken from fd 1, which is always the pty, because fd
+	// 0 may now be a file.
+	ptmx, err := creack.StartWithAttrs(cmd, size.winsize(), &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1})
+	if err != nil {
+		return domain.Capture{ExitCode: startFailureCode(err)}, fmt.Errorf("%s: %w", s.Argv[0], unwrapStart(err))
+	}
+	defer ptmx.Close()
+
+	// The child is the leader of a session of its own, on the pty, so the
+	// signals a user sends codeshot's way do not reach it by themselves: a
+	// ^C typed while stdin is not in raw mode lands on codeshot. Passing them
+	// on to the child's process group means codeshot outlives them, which is
+	// what lets it restore the terminal and still take the picture of an
+	// interrupted run.
+	forward := make(chan os.Signal, 1)
+	signal.Notify(forward, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(forward)
+
+	// The goroutine is waited for, not just told to stop, before ptmx closes:
+	// a resize it is part-way through still has ptmx's descriptor in hand.
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	defer func() { close(stop); <-stopped }()
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-winch:
+				size.follow(s.Size)
+				creack.Setsize(ptmx, size.winsize())
+			case sig := <-forward:
+				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	if interactive {
+		// Raw mode is what lets every keystroke - ^C, arrows, a bare
+		// letter - reach the child untranslated, with the pty's own line
+		// discipline doing the cooking. Failing to get it is not worth
+		// failing the run for; the child still runs, only less
+		// interactively. A terminal never reaches end-of-file, so the copy
+		// ends only when codeshot does.
+		restore, _ := tty.Raw(s.Stdin)
+		defer restore()
+		go io.Copy(ptmx, s.Stdin)
+	}
+
+	captured := tap.New(s.Stdout)
+	_, err = io.Copy(captured, ptmx)
+	// A pty master reports EIO once the last holder of the other end is gone.
+	// That is how a pty says end-of-output, not a failure.
+	if err != nil && !errors.Is(err, syscall.EIO) {
+		return domain.Capture{}, fmt.Errorf("reading from %s: %w", s.Argv[0], err)
+	}
+
+	code, err := exitCode(cmd.Wait())
+	if err != nil {
+		return domain.Capture{}, err
+	}
+	cols, rows := size.get()
+	return domain.Capture{
+		Command:  command,
+		Cwd:      cwd,
+		ExitCode: code,
+		Cols:     cols,
+		Rows:     rows,
+		Bytes:    captured.Bytes(),
+	}, nil
+}
+
+// windowSize is the pty's size, read on start and again on every SIGWINCH.
+// An explicit width survives a resize: --cols asked for that width, and a
+// user dragging their window wider has not changed their mind about it.
+// maxCols caps the width regardless of source.
+type windowSize struct {
+	mu         sync.Mutex
+	fixedCols  int
+	maxCols    int
+	cols, rows int
+}
+
+func (w *windowSize) follow(f *os.File) {
+	cols, rows := tty.Size(f)
+	if w.fixedCols > 0 {
+		cols = w.fixedCols
+	}
+	if w.maxCols > 0 && cols > w.maxCols {
+		cols = w.maxCols
+	}
+	w.mu.Lock()
+	w.cols, w.rows = cols, rows
+	w.mu.Unlock()
+}
+
+func (w *windowSize) get() (cols, rows int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cols, w.rows
+}
+
+func (w *windowSize) winsize() *creack.Winsize {
+	cols, rows := w.get()
+	return &creack.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
+}
+
+// exitCode turns what Wait said into what a shell would have put in $?. A
+// child that exited reports its status; one killed by a signal reports 128
+// plus the signal, which exec.ExitError.ExitCode on its own gives as -1.
+func exitCode(err error) (int, error) {
+	if err == nil {
+		return 0, nil
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return 0, fmt.Errorf("waiting for the command: %w", err)
+	}
+	if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), nil
+	}
+	return exit.ExitCode(), nil
+}
+
+// startFailureCode is the status a shell gives a command it could not start:
+// 127 for one it cannot find, 126 for one it found and may not run.
+func startFailureCode(err error) int {
+	switch {
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
+		return 127
+	case errors.Is(err, fs.ErrPermission):
+		return 126
+	}
+	return 1
+}
+
+// unwrapStart makes the message read like a shell's. exec phrases a missing
+// binary as `exec: "foo": executable file not found in $PATH`, which names
+// the command a second time when the caller has already prefixed it.
+//
+// The hint is there because the commonest way to reach this is not a typo.
+// codeshot execs the command itself, so a shell alias or function - which
+// lives in the shell and is invisible to any child process - is not found,
+// and `codeshot -- ll` fails for someone whose ll works everywhere else.
+// The shim resolves aliases before codeshot is reached, which is the fix
+// codeshot itself cannot apply.
+func unwrapStart(err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return errors.New("command not found; if it is a shell alias or function, " +
+			"source shim/codeshot.zsh (or .bash) so the shell can expand it first")
+	}
+	return err
+}
+
+func childEnv(base []string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	env := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "COLORTERM=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "TERM="+term, "COLORTERM="+colorterm)
+}
+
+// shellJoin turns argv back into a command line a shell would accept, which is
+// what the prompt line in the picture shows. The quoting codeshot's caller
+// typed is gone by the time argv arrives - `-m "fix it"` and `-m 'fix it'` are
+// the same argv - so each argument that needs quoting gets single quotes, the
+// one form with no characters special inside it.
+func shellJoin(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = shellQuote(a)
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		if !safeUnquoted(r) {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
+}
+
+func safeUnquoted(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune("_-+=:,./@%^", r)
+}

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# =========================================================
+# Taskfile gives you a set of quick tasks for your project
+# More info: https://github.com/Enrise/Taskfile
+# =========================================================
+
+function task:test { ## Run every test
+	task:vet
+	# -race is not belt and braces here: fonts.Set caches faces in a map and
+	# shares an sfnt.Buffer, and the test that covers concurrent access to it
+	# can only see the fault through the race detector.
+	go test -race ./...
+}
+
+function task:vet { ## Run go vet
+	go vet ./...
+}
+
+function task:build { ## Build the binary
+	go build -o codeshot ./cmd/codeshot
+}
+
+function task:golden { ## Rewrite the golden images after a deliberate change
+	go test ./internal/adapters/render/raster/ -update
+}
+
+function task:demo { ## Take a shot of ls, to look at
+	task:build
+	# macOS ls only colours with -G; GNU ls colours on a terminal with
+	# --color=auto, and under codeshot it is on one.
+	if [[ "$(uname)" == "Darwin" ]]; then
+		./codeshot demo.png -- ls -G -la
+	else
+		./codeshot demo.png -- ls --color=auto -la
+	fi
+}
+
+function task:fmt { ## Format everything
+	gofmt -w .
+}
+
+function task:help { ## Show this help
+	grep -E '^function task:.*##' "$0" | sed 's/function task:/  /; s/ *{ *## /\t/' | expand -t 24
+}
+
+"task:${1:-help}" "${@:2}"

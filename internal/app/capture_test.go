@@ -1,0 +1,282 @@
+package app
+
+import (
+	"errors"
+	"image"
+	"strings"
+	"testing"
+
+	"codeshot/internal/domain"
+)
+
+type stubSource struct {
+	c   domain.Capture
+	err error
+}
+
+func (s stubSource) Capture() (domain.Capture, error) { return s.c, s.err }
+
+type stubEmulator struct {
+	seen []string
+	// title is what the emulated stream set with an OSC, as nearly every
+	// interactive shell does.
+	title string
+}
+
+// Emulate wraps each line at c.Cols, the way a real terminal would at the
+// right margin. Honouring Cols (rather than ignoring it, as an earlier
+// version of this stub did) matters because Service.header re-emulates the
+// prompt at the capture's own width: a stub that ignores Cols would agree
+// just as happily with a caller that emulated the header at the wrong width,
+// silently misaligning the header against the body.
+func (e *stubEmulator) Emulate(c domain.Capture) (domain.Result, error) {
+	e.seen = append(e.seen, string(c.Bytes))
+	g := domain.Grid{Cols: c.Cols}
+	for _, line := range strings.Split(strings.TrimSuffix(string(c.Bytes), "\r\n"), "\r\n") {
+		g.Lines = append(g.Lines, wrapLine(line, c.Cols)...)
+	}
+	return domain.Result{Main: g, Title: e.title}, nil
+}
+
+// wrapLine breaks a line into rows of at most cols runes. cols <= 0 means no
+// wrapping.
+func wrapLine(line string, cols int) [][]domain.Cell {
+	runes := []rune(line)
+	if cols <= 0 || len(runes) <= cols {
+		return [][]domain.Cell{cellsOf(runes)}
+	}
+	var rows [][]domain.Cell
+	for len(runes) > 0 {
+		n := cols
+		if n > len(runes) {
+			n = len(runes)
+		}
+		rows = append(rows, cellsOf(runes[:n]))
+		runes = runes[n:]
+	}
+	return rows
+}
+
+func cellsOf(runes []rune) []domain.Cell {
+	row := make([]domain.Cell, 0, len(runes))
+	for _, r := range runes {
+		row = append(row, domain.Cell{Rune: r, Width: 1})
+	}
+	return row
+}
+
+type stubPrompt struct{}
+
+func (stubPrompt) Header(c domain.Capture) []byte { return []byte("> " + c.Command + "\r\n") }
+
+type stubThemes struct{ err error }
+
+func (s stubThemes) Theme(name string) (domain.Theme, error) {
+	if s.err != nil {
+		return domain.Theme{}, s.err
+	}
+	return domain.Theme{Name: name}, nil
+}
+
+type stubRenderer struct{ got domain.Window }
+
+func (r *stubRenderer) Render(w domain.Window) (image.Image, error) {
+	r.got = w
+	return image.NewRGBA(image.Rect(0, 0, 1, 1)), nil
+}
+
+type stubGallery struct {
+	stored string
+	taken  map[string]bool
+}
+
+func (g *stubGallery) Exists(name string) bool { return g.taken[name] }
+func (g *stubGallery) Store(name string, img image.Image) (string, error) {
+	g.stored = name
+	return "/gallery/" + name, nil
+}
+
+type stubReporter struct{ path string }
+
+func (r *stubReporter) Stored(path string) { r.path = path }
+func (r *stubReporter) Warn(string)        {}
+
+func newService() (Service, *stubRenderer, *stubGallery, *stubReporter) {
+	rend := &stubRenderer{}
+	gal := &stubGallery{taken: map[string]bool{}}
+	rep := &stubReporter{}
+	return Service{
+		Source:  stubSource{c: domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 10, Rows: 4, Bytes: []byte("a.go\r\nb.go\r\n")}},
+		Emu:     &stubEmulator{},
+		Prompt:  stubPrompt{},
+		Themes:  stubThemes{},
+		Render:  rend,
+		Gallery: gal,
+		Report:  rep,
+	}, rend, gal, rep
+}
+
+func TestRunComposesPromptAboveOutput(t *testing.T) {
+	s, rend, _, _ := newService()
+	if _, err := s.Run(Request{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := rend.got.Frame.Grid.Text(); got != "> ls -la\na.go\nb.go\n" {
+		t.Errorf("frame = %q", got)
+	}
+}
+
+func TestRunHonoursNoPrompt(t *testing.T) {
+	s, rend, _, _ := newService()
+	if _, err := s.Run(Request{NoPrompt: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rend.got.Frame.Grid.Text(); got != "a.go\nb.go\n" {
+		t.Errorf("frame = %q, want no prompt line", got)
+	}
+}
+
+func TestRunTitlesTheWindowWithTheCommand(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Run(Request{})
+	if rend.got.Chrome.Title != "ls -la" {
+		t.Errorf("Title = %q, want the command", rend.got.Chrome.Title)
+	}
+}
+
+// TestRunPrefersTheCommandOverAnOSCTitle records a decision, not just a
+// behaviour. The window title defaults to the command, and an OSC title is
+// only consulted when no command is known. Preferring the OSC title looks
+// reasonable in the abstract - it is what the real window would have shown -
+// but nearly every interactive shell sets one to something like
+// "user@host: ~/code", so a user asking for a picture of `make build` would
+// get their shell's status line above it instead of the command they named.
+func TestRunPrefersTheCommandOverAnOSCTitle(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Emu = &stubEmulator{title: "user@host: ~/code"}
+	s.Run(Request{})
+	if rend.got.Chrome.Title != "ls -la" {
+		t.Errorf("Title = %q, want the command to beat the shell's OSC title", rend.got.Chrome.Title)
+	}
+}
+
+// TestRunFallsBackToTheOSCTitleWithNoCommand is the other half: pipe mode
+// without the shim cannot know the command, and there an OSC title is the
+// best name the window has.
+func TestRunFallsBackToTheOSCTitleWithNoCommand(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Source = stubSource{c: domain.Capture{Cols: 10, Rows: 4, Bytes: []byte("a.go\r\n")}}
+	s.Emu = &stubEmulator{title: "htop"}
+	s.Run(Request{})
+	if rend.got.Chrome.Title != "htop" {
+		t.Errorf("Title = %q, want the OSC title when no command is known", rend.got.Chrome.Title)
+	}
+}
+
+func TestRunPrefersAnExplicitTitle(t *testing.T) {
+	s, rend, _, _ := newService()
+	c := domain.DefaultChrome()
+	c.Title = "chosen"
+	s.Run(Request{Chrome: c})
+	if rend.got.Chrome.Title != "chosen" {
+		t.Errorf("Title = %q", rend.got.Chrome.Title)
+	}
+}
+
+func TestRunNamesAndStoresTheShot(t *testing.T) {
+	s, _, gal, rep := newService()
+	out, err := s.Run(Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gal.stored != "ls-la.png" {
+		t.Errorf("stored %q, want ls-la.png", gal.stored)
+	}
+	if out.Path != "/gallery/ls-la.png" || rep.path != out.Path {
+		t.Errorf("path %q, reported %q", out.Path, rep.path)
+	}
+}
+
+func TestRunFailsWhenTheThemeIsUnknown(t *testing.T) {
+	s, _, _, _ := newService()
+	s.Themes = stubThemes{err: errors.New("no such theme")}
+	if _, err := s.Run(Request{Theme: "nope"}); err == nil {
+		t.Error("Run ignored an unresolvable theme")
+	}
+}
+
+func TestRunPassesFrameOptionsThrough(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Run(Request{Frame: domain.FrameOptions{Rows: 1}})
+	if rend.got.Frame.Grid.Rows() != 1 {
+		t.Errorf("rows = %d, want the crop applied", rend.got.Frame.Grid.Rows())
+	}
+}
+
+func TestRunEmulatesTheHeaderAtTheCaptureWidth(t *testing.T) {
+	// The header is emulated at the capture's own Cols/Rows so it wraps the
+	// same way the real output would. stubPrompt renders "> ls -la\r\n" - 8
+	// runes - which at Cols=5 wraps into "> ls " and "-la". If Service.header
+	// emulated it at some other width (999, say), it would not wrap and the
+	// composed text would read "> ls -la" on one line instead of two, so this
+	// is a direct check that the capture's width, not some fixed one, made
+	// the trip.
+	rend := &stubRenderer{}
+	s := Service{
+		Source:  stubSource{c: domain.Capture{Command: "ls -la", Cwd: "/tmp", Cols: 5, Rows: 4, Bytes: []byte("ab\r\ncd\r\n")}},
+		Emu:     &stubEmulator{},
+		Prompt:  stubPrompt{},
+		Themes:  stubThemes{},
+		Render:  rend,
+		Gallery: &stubGallery{taken: map[string]bool{}},
+		Report:  &stubReporter{},
+	}
+	if _, err := s.Run(Request{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := "> ls\n-la\nab\ncd\n"
+	if got := rend.got.Frame.Grid.Text(); got != want {
+		t.Errorf("frame = %q, want %q (header wrapped at the capture's width)", got, want)
+	}
+}
+
+// TestRunCarriesTheChildsExitCode pins the one thing wrapper mode needs from
+// the app layer that render mode never did. domain.Capture has carried an
+// ExitCode since the beginning, but Run threw it away, so the CLI had no
+// route to the child's status short of reaching around the port and asking a
+// concrete pty source. An Outcome is that route, and it is honest for every
+// source: a file and a pipe simply report 0.
+func TestRunCarriesTheChildsExitCode(t *testing.T) {
+	s, _, _, _ := newService()
+	s.Source = stubSource{c: domain.Capture{Command: "false", Cols: 10, Rows: 4, ExitCode: 3}}
+	out, err := s.Run(Request{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want the child's 3", out.ExitCode)
+	}
+	if out.Path == "" {
+		t.Error("a failing child still produced no path; the image is owed either way")
+	}
+}
+
+// TestRunKeepsTheExitCodeOfASourceThatFailed covers a command that never ran.
+// Design §10 wants `codeshot -- nosuchcmd` to exit 127 the way a shell would,
+// and the source is the only thing that knows the child was not found, so a
+// source may fail and still say what the exit code is. Nothing is rendered:
+// a picture of a command that never started would be a picture of nothing.
+func TestRunKeepsTheExitCodeOfASourceThatFailed(t *testing.T) {
+	s, rend, _, _ := newService()
+	s.Source = stubSource{c: domain.Capture{ExitCode: 127}, err: errors.New("nosuchcmd: command not found")}
+	out, err := s.Run(Request{})
+	if err == nil {
+		t.Fatal("Run succeeded with a source that failed")
+	}
+	if out.ExitCode != 127 {
+		t.Errorf("ExitCode = %d, want the source's 127", out.ExitCode)
+	}
+	if rend.got.Frame.Grid.Rows() != 0 {
+		t.Error("Run rendered a command that never started")
+	}
+}
